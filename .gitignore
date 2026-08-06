@@ -1,0 +1,15 @@
+*.o
+*.out
+*.so
+loop_charger_inverter
+build/
+arm/
+x86/
+
+*.log
+
+.DS_Store
+Thumbs.db
+
+.vscode/
+.cursorrules

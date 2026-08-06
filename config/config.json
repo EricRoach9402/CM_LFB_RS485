@@ -1,0 +1,25 @@
+{
+    "INVERTER": [
+        {
+            "name": "Inverter#1",
+            "enabled": true,
+            "modbus_format": "RTU",
+            "modbus_role": "Slave",
+            "modbus_uid": 1,
+            "path": "/dev/ttyUSB0",
+            "baud_rate": 9600
+        }
+    ],
+    "UPS": [
+        {
+            "name": "UPS#1",
+            "enabled": true,
+            "modbus_uid": 2,
+            "modbus_format": "RTU",
+            "modbus_role": "Slave",
+            "path": "/dev/ttyUSB0",
+            "baud_rate": 9600
+        }
+    ]
+}
+
