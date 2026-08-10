@@ -204,13 +204,15 @@ void device_map_read_to_pool(const device_map_profile_t *profile,
             device_find_slot(profile, dev_addr);
 
         if (!m) {
-            LOG_VERBOSE("[device_map] no mapping for dev 0x%04X", dev_addr);
+            LOG_VERBOSE("[device_map] %s: no mapping for dev 0x%04X",
+                        profile->name, dev_addr);
             continue;
         }
 
         if (m->pool_address >= INTERNAL_POOL_SIZE) {
-            LOG_WARNING("[device_map] pool_address 0x%04X out of bounds (dev 0x%04X)",
-                        m->pool_address, dev_addr);
+            LOG_WARNING("[device_map] %s: pool_address 0x%04X out of bounds "
+                        "(dev 0x%04X)",
+                        profile->name, m->pool_address, dev_addr);
             continue;
         }
 
@@ -221,8 +223,8 @@ void device_map_read_to_pool(const device_map_profile_t *profile,
         internal_pool[m->pool_address] = raw;
         pthread_rwlock_unlock(internal_pool_lock);
 
-        LOG_VERBOSE("[device_map] dev 0x%04X -> pool[0x%04X] = 0x%04X",
-                    dev_addr, m->pool_address, raw);
+        LOG_VERBOSE("[device_map] %s: dev 0x%04X -> pool[0x%04X] = 0x%04X",
+                    profile->name, dev_addr, m->pool_address, raw);
     }
 }
 

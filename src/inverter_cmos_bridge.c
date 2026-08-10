@@ -50,6 +50,7 @@
 /* Device register map 2000H bit 0 : Stop Bit, bit 1 : Run Bit*/
 #define INVERTER_STOP_BIT (1 << 0)
 #define INVERTER_RUN_BIT (1 << 1)
+#define INVERTER_ENABLE_ACCELERATION_BIT (1 << 12)
 
 /* Device register map 2002H bit 0 : EF, bit 1: reset, bit 2: B.B, bit 5 : Fire Mode Bit*/
 #define INVERTER_EF_BIT (1 << 0)
@@ -182,9 +183,11 @@ static int on_write(uint8_t uid, uint16_t addr, uint16_t val)
 /* ── CMOS callbacks ───────────────────────────────────────────────────── */
 static void on_bypass_cmd(const char *topic, const char *value)
 {
-    (void)topic;
+    LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='bypass' value='%s'",
+                topic ? topic : "-", value ? value : "");
+
     uint16_t bypass_bool_val = (uint16_t)strtoul(value, NULL, 0);
-    
+
     if ( bypass_bool_val == 1 ) {
         on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_fault_constrol_cmd_reg, INVERTER_FIRE_MODE_BIT);
         LOG_INFO("[CMOS Bridge] Received enable bypass command : %u" , bypass_bool_val);
@@ -195,7 +198,9 @@ static void on_bypass_cmd(const char *topic, const char *value)
 }
 static void on_init_inverter_cmd(const char *topic, const char *value)
 {
-    (void)topic;
+    LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='init' value='%s'",
+                topic ? topic : "-", value ? value : "");
+
     uint16_t init_bool_val = (uint16_t)strtoul(value, NULL, 0);
 
     if ( init_bool_val == 1 ) {
@@ -208,7 +213,8 @@ static void on_init_inverter_cmd(const char *topic, const char *value)
 
 static void on_main_pump_duty_cmd(const char *topic, const char *value)
 {
-    (void)topic;
+    LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='main_pump' value='%s'",
+                topic ? topic : "-", value ? value : "");
 
     uint16_t duty_val = (uint16_t)strtoul(value, NULL, 0);
     LOG_DEBUG("[CMOS Bridge] Operation commands received register: 0x%04X duty:%u",dev_frequency_cmd_reg, duty_val);
@@ -217,35 +223,44 @@ static void on_main_pump_duty_cmd(const char *topic, const char *value)
     LOG_DEBUG("[CMOS Bridge] duty value convert to frequency: 0x%04X(%u)", frequency_val, frequency_val);
 
     if ( frequency_val == 0 ) {
+        uint16_t operation_cmd_val = INVERTER_STOP_BIT | INVERTER_ENABLE_ACCELERATION_BIT;
         on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_frequency_cmd_reg, frequency_val);
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, INVERTER_STOP_BIT);
+        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, operation_cmd_val);
         LOG_INFO("[CMOS Bridge] Received stop command : %u" , frequency_val);
     } else {
+        uint16_t operation_cmd_val = INVERTER_RUN_BIT | INVERTER_ENABLE_ACCELERATION_BIT;
         on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_frequency_cmd_reg, frequency_val);
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, INVERTER_RUN_BIT);
+        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, operation_cmd_val);
         LOG_INFO("[CMOS Bridge] Received run command : %u" , frequency_val);
     }
 }
 
 static void on_frequency_write_cmd(const char *topic, const char *value)
 {
-    (void)topic;
+    LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='inv_frequency_write_commands' value='%s'",
+                topic ? topic : "-", value ? value : "");
+
     uint16_t frequency_val  = (uint16_t)strtoul(value, NULL, 0);
 
+    
     if ( frequency_val == 0 ) {
+        uint16_t operation_cmd_val = INVERTER_STOP_BIT | INVERTER_ENABLE_ACCELERATION_BIT;
         on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_frequency_cmd_reg, frequency_val);
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, INVERTER_STOP_BIT);
+        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, operation_cmd_val);
         LOG_INFO("[CMOS Bridge] Received stop command : %u" , frequency_val);
     } else {
+        uint16_t operation_cmd_val = INVERTER_RUN_BIT | INVERTER_ENABLE_ACCELERATION_BIT;
         on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_frequency_cmd_reg, frequency_val);
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, INVERTER_RUN_BIT);
+        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, operation_cmd_val);
         LOG_INFO("[CMOS Bridge] Received run command : %u" , frequency_val);
     }
 }
 
 static void on_operation_cmd(const char *topic, const char *value)
 {
-    (void)topic;
+    LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='inv_operation_commands' value='%s'",
+                topic ? topic : "-", value ? value : "");
+
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
 
     on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, val);
@@ -254,10 +269,12 @@ static void on_operation_cmd(const char *topic, const char *value)
 
 static void on_fault_control_cmd(const char *topic, const char *value)
 {
-    (void)topic;
+    LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='inv_fault_Control_commands' value='%s'",
+                topic ? topic : "-", value ? value : "");
+
     uint16_t addr = int_fault_control_cmd_reg;
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
-    
+
     on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
     LOG_INFO("[CMOS Bridge] Operation commands received register: '%4x' value:'%s'",addr, value);
 }
@@ -346,6 +363,13 @@ static void publish_pool_register(const module_config_t *cfg,
 
     char val_str[8];
     snprintf(val_str, sizeof(val_str), "%u", val);
+
+    LOG_VERBOSE("[Inverter CMOS] PUB topic='%s' state='%s' type='%s' key='%s' value='%s'",
+                BRIDGE_PUB_TOPIC,
+                state ? state : "-",
+                type ? type : "-",
+                key ? key : "-",
+                val_str);
 
     cmos_publish(state, type, key, val_str);
 }

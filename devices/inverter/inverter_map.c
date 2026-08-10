@@ -135,6 +135,11 @@ const uint16_t dev_frequency_lower_limit_reg = 0x010B; //010B
 const uint16_t dev_acceleration_reg = 0x010C; //0x010C
 const uint16_t dev_deceleration_reg = 0x010D; //0x010D
 
+const uint16_t dev_s_speed_start_reg = 0x0118; // 0x0118
+const uint16_t dev_s_speed_end_reg = 0x0119; // 0x0119
+const uint16_t dev_s_deceleration_start_reg = 0x011A; // 0x011A
+const uint16_t dev_s_deceleration_end_reg = 0x011B; // 0x011B
+
 const uint16_t dev_slave_id = 0x0900; //0x0900
 const uint16_t dev_baud_rate = 0x0901; //0x0901
 const uint16_t dev_mb_error_handle_reg = 0x0902; //0x0902

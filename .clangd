@@ -4,13 +4,13 @@ CompileFlags:
     - -Wextra
     - -std=c11
     - -D_GNU_SOURCE
-    - -I/home/eric/CM_LFB_INVERTER (copy)/include
-    - -I/home/eric/CM_LFB_INVERTER (copy)/devices
-    - -I/home/eric/CM_LFB_INVERTER (copy)/lib/alarm
-    - -I/home/eric/CM_LFB_INVERTER (copy)/lib/cmos
-    - -I/home/eric/CM_LFB_INVERTER (copy)/lib/modbus
-    - -I/home/eric/CM_LFB_INVERTER (copy)/lib/device_map
-    - -I/home/eric/CM_LFB_INVERTER (copy)/lib/log
-    - -I/home/eric/CM_LFB_INVERTER (copy)/lib/sqlite3
-    - -I/home/eric/CM_LFB_INVERTER (copy)/tests/unity
+    - -I/home/eric/CM_LFB_RS485/include
+    - -I/home/eric/CM_LFB_RS485/devices
+    - -I/home/eric/CM_LFB_RS485/lib/alarm
+    - -I/home/eric/CM_LFB_RS485/lib/cmos
+    - -I/home/eric/CM_LFB_RS485/lib/modbus
+    - -I/home/eric/CM_LFB_RS485/lib/device_map
+    - -I/home/eric/CM_LFB_RS485/lib/log
+    - -I/home/eric/CM_LFB_RS485/lib/sqlite3
+    - -I/home/eric/CM_LFB_RS485/tests/unity
 

@@ -171,10 +171,11 @@ static int on_write(uint8_t uid, uint16_t addr, uint16_t val)
 
 static void on_test_cmd(const char *topic, const char *value)
 {
+    LOG_VERBOSE("[UPS CMOS] SUB topic='%s' key='ups_test' value='%s'",
+                topic ? topic : "-", value ? value : "");
+
     uint16_t addr = 0x0012;
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
-
-    (void)topic;
 
     LOG_INFO("[CMOS Bridge] test command received: '%s'", value);
 
@@ -264,6 +265,13 @@ static void publish_pool_register(const module_config_t *cfg,
 
     char val_str[8];
     snprintf(val_str, sizeof(val_str), "%u", val);
+
+    LOG_VERBOSE("[UPS CMOS] PUB topic='%s' state='%s' type='%s' key='%s' value='%s'",
+                BRIDGE_PUB_TOPIC,
+                state ? state : "-",
+                type ? type : "-",
+                key ? key : "-",
+                val_str);
 
     cmos_publish(state, type, key, val_str);
 }

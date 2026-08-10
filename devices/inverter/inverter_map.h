@@ -68,6 +68,11 @@ extern const uint16_t dev_frequency_lower_limit_reg;
 extern const uint16_t dev_acceleration_reg;
 extern const uint16_t dev_deceleration_reg;
 
+extern const uint16_t dev_s_speed_start_reg;
+extern const uint16_t dev_s_speed_end_reg;
+extern const uint16_t dev_s_deceleration_start_reg;
+extern const uint16_t dev_s_deceleration_end_reg;
+
 extern const uint16_t dev_slave_id;
 extern const uint16_t dev_baud_rate;
 extern const uint16_t dev_mb_error_handle_reg;

@@ -715,13 +715,16 @@ static void init_inverter_reg(inverter_unit_t *unit)
     uint16_t run_souce_val = 0x0002;       /* default RS-485 */
     uint16_t frequency_upper_val = 0xE9FC; /* default 59900 */
     uint16_t frequency_lower_val = 0x0000; /* default 0 */
-    uint16_t acceleration_val = 0x000A;    /* default 10 */
-    uint16_t deceleration_val = 0x000A;    /* default 10 */
+    uint16_t acceleration_val = 0x03E8;    /* default 1000 */
+    uint16_t deceleration_val = 0x03E8;    /* default 10 00*/
     uint16_t slave_id_val = 0x0001;        /* default 1 */
     uint16_t baud_rate_val = 0x0060;       /* default 9600 */
     uint16_t error_handle_val = 0x0001;    /* Slow down and stop */
     uint16_t serial_setting_val = 0x000C;  /* 8N1 */
-
+    uint16_t s_speed_start_val = 0x0096;    /* default 150 */
+    uint16_t s_speed_end_val = 0x0096;      /* default 150 */
+    uint16_t s_deceleration_start_val = 0x0096; /* default 150 */
+    uint16_t s_deceleration_end_val = 0x0096;   /* default 150 */
     struct {
         uint16_t        addr;
         const uint16_t *value;
@@ -736,6 +739,10 @@ static void init_inverter_reg(inverter_unit_t *unit)
         { dev_baud_rate,                &baud_rate_val },
         { dev_mb_error_handle_reg,      &error_handle_val },
         { dev_mb_serial_setting_reg,    &serial_setting_val },
+        { dev_s_speed_start_reg,        &s_speed_start_val },
+        { dev_s_speed_end_reg,          &s_speed_end_val },
+        { dev_s_deceleration_start_reg, &s_deceleration_start_val },
+        { dev_s_deceleration_end_reg,   &s_deceleration_end_val },
     };
 
     for (size_t i = 0; i < sizeof(writes) / sizeof(writes[0]); i++) {
