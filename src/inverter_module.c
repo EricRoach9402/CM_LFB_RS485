@@ -38,6 +38,7 @@
  */
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
@@ -104,7 +105,7 @@ static int queue_pop(inverter_cmd_queue_t *q, inverter_write_cmd_t *out);
 static inverter_unit_t *inverter_unit_from_config(const module_config_t *cfg);
 static inverter_unit_t *inverter_unit_from_uid(uint8_t uid);
 static void interruptible_sleep_ms(const inverter_unit_t *unit, uint32_t duration_ms);
-static int write_registers_unlocked(inverter_unit_t *unit, uint16_t addr, const uint16_t *values, uint16_t count, inverter_write_mode_t mode);
+static int write_registers_locked(inverter_unit_t *unit, uint16_t addr, const uint16_t *values, uint16_t count, inverter_write_mode_t mode);
 static int write_registers_to_device(inverter_unit_t *unit, uint16_t addr, const uint16_t *values, uint16_t count, inverter_write_mode_t mode);
 static void init_inverter_reg(inverter_unit_t *unit);
 static void *inverter_rtu_thread(void *arg);
@@ -347,7 +348,7 @@ static int inverter_rtu_process_callback(module_config_t *cfg)
         bus_coord_acquire(cfg->path);
 
         do {
-            if (write_registers_unlocked(unit, cmd.addr, cmd.values,
+            if (write_registers_locked(unit, cmd.addr, cmd.values,
                                          cmd.count, cmd.mode) != 0) {
                 LOG_WARNING("[Inverter RTU] %s: queued write to 0x%04X failed, "
                             "continuing scan.", cfg->name, cmd.addr);
@@ -593,11 +594,16 @@ static void interruptible_sleep_ms(const inverter_unit_t *unit,
 }
 
 /**
- * @brief Execute a Modbus write without bus_coord (caller must hold the bus).
+ * @brief Execute a Modbus write without acquiring bus_coord.
+ *
+ * "unlocked" means this helper does not call bus_coord_acquire() /
+ * bus_coord_release().  The caller must already hold the bus (queue drain,
+ * init_inverter_reg) or use write_registers_to_device() which wraps this
+ * with acquire / settle / release.
  *
  * @return 0 on success, -1 on failure.
  */
-static int write_registers_unlocked(inverter_unit_t *unit,
+static int write_registers_locked(inverter_unit_t *unit,
                                     uint16_t         addr,
                                     const uint16_t  *values,
                                     uint16_t         count,
@@ -637,8 +643,27 @@ static int write_registers_unlocked(inverter_unit_t *unit,
         return -1;
     }
 
-    LOG_DEBUG("[Inverter RTU] %s: wrote %u register(s) at 0x%04X.",
-              unit->cfg->name, count, addr);
+    if (count == 1) {
+        LOG_VERBOSE("[Inverter RTU] %s: wrote register 0x%04X value=0x%04X.",
+                    unit->cfg->name, addr, values[0]);
+    } else {
+        char val_buf[160];
+        size_t pos = 0;
+
+        val_buf[0] = '\0';
+        for (uint16_t i = 0; i < count; i++) {
+            int n = snprintf(val_buf + pos, sizeof(val_buf) - pos,
+                             "%s0x%04X", (i == 0) ? "" : " ", values[i]);
+            if (n < 0 || (size_t)n >= sizeof(val_buf) - pos) {
+                break;
+            }
+            pos += (size_t)n;
+        }
+
+        LOG_VERBOSE("[Inverter RTU] %s: wrote %u register(s) at 0x%04X "
+                    "values=[%s].",
+                    unit->cfg->name, count, addr, val_buf);
+    }
     return 0;
 }
 
@@ -646,7 +671,7 @@ static int write_registers_unlocked(inverter_unit_t *unit,
  * @brief Execute a Modbus write with bus ownership and post-write settle.
  *
  * Used by msg_callback (single-shot path).  Queue drain and init hold the
- * bus themselves and call write_registers_unlocked() instead.
+ * bus themselves and call write_registers_locked() instead.
  */
 static int write_registers_to_device(inverter_unit_t *unit,
                                      uint16_t         addr,
@@ -657,7 +682,7 @@ static int write_registers_to_device(inverter_unit_t *unit,
     const char *path = unit->cfg->path;
 
     bus_coord_acquire(path);
-    int result = write_registers_unlocked(unit, addr, values, count, mode);
+    int result = write_registers_locked(unit, addr, values, count, mode);
     if (result == 0) {
         usleep(INVERTER_POST_WRITE_SETTLE_US);
     }
@@ -713,8 +738,8 @@ static void init_inverter_reg(inverter_unit_t *unit)
 {
     uint16_t frequency_souce_val = 0x0001; /* default RS-485 */
     uint16_t run_souce_val = 0x0002;       /* default RS-485 */
-    uint16_t frequency_upper_val = 0xE9FC; /* default 59900 */
-    uint16_t frequency_lower_val = 0x0000; /* default 0 */
+    uint16_t frequency_upper_val = 0x1766; /* default 5990 */
+    uint16_t frequency_lower_val = 0x06F4; /* default 1780 */
     uint16_t acceleration_val = 0x03E8;    /* default 1000 */
     uint16_t deceleration_val = 0x03E8;    /* default 10 00*/
     uint16_t slave_id_val = 0x0001;        /* default 1 */
@@ -746,7 +771,7 @@ static void init_inverter_reg(inverter_unit_t *unit)
     };
 
     for (size_t i = 0; i < sizeof(writes) / sizeof(writes[0]); i++) {
-        if (write_registers_unlocked(unit, writes[i].addr, writes[i].value,
+        if (write_registers_locked(unit, writes[i].addr, writes[i].value,
                                      1, INVERTER_WRITE_MODE_FC06) == 0) {
             usleep(INVERTER_INTER_SEGMENT_DELAY_US);
         }

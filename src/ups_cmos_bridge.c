@@ -162,7 +162,7 @@ static int on_write(uint8_t uid, uint16_t addr, uint16_t val)
         return -1;
     }
 
-    LOG_DEBUG("[CMOS Bridge] write queued: uid=%u addr=0x%04X val=%u",
+    LOG_INFO("[CMOS Bridge] write queued: uid=%u addr=0x%04X val=%u",
               uid, addr, val);
     return 0;
 }
@@ -172,7 +172,7 @@ static int on_write(uint8_t uid, uint16_t addr, uint16_t val)
 static void on_test_cmd(const char *topic, const char *value)
 {
     LOG_VERBOSE("[UPS CMOS] SUB topic='%s' key='ups_test' value='%s'",
-                topic ? topic : "-", value ? value : "");
+                topic ? topic : NULL, value ? value : "");
 
     uint16_t addr = 0x0012;
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
@@ -268,9 +268,9 @@ static void publish_pool_register(const module_config_t *cfg,
 
     LOG_VERBOSE("[UPS CMOS] PUB topic='%s' state='%s' type='%s' key='%s' value='%s'",
                 BRIDGE_PUB_TOPIC,
-                state ? state : "-",
-                type ? type : "-",
-                key ? key : "-",
+                state ? state : NULL,
+                type ? type : NULL,
+                key ? key : NULL,
                 val_str);
 
     cmos_publish(state, type, key, val_str);

@@ -45,6 +45,7 @@
  */
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
@@ -64,6 +65,7 @@
 #define UPS_RECONNECT_DELAY_MS         5000u
 #define UPS_COMM_FAIL_THRESHOLD        5
 #define UPS_INTER_SEGMENT_DELAY_US     40000u   /* 40 ms between FC03 frames */
+#define UPS_POST_WRITE_SETTLE_US       70000u   /* hold bus after writes before Inverter may TX */
 #define UPS_SHUTDOWN_CHECK_INTERVAL_MS 100u     /* granularity for interruptible sleeps */
 
 /* ── Command queue constants ──────────────────────────────────────────── */
@@ -228,6 +230,17 @@ static const char *ups_bus_path(const ups_unit_t *unit)
 }
 
 /**
+ * @brief Log tag reflecting the active transport (TCP vs RTU).
+ */
+static const char *ups_log_tag(const ups_unit_t *unit)
+{
+    if (unit && unit->cfg && unit->cfg->format == MODBUS_FORMAT_TCP) {
+        return "UPS TCP";
+    }
+    return "UPS RTU";
+}
+
+/**
  * @brief Connect the unit's transport (TCP socket or RTU serial port).
  *
  * RTU additionally probes the device with one FC03 read after opening the
@@ -334,46 +347,43 @@ static int unit_read_holding_registers(ups_unit_t *unit, uint16_t addr,
 }
 
 /**
- * @brief Execute a Modbus write (FC06 or FC16) directly on a unit.
+ * @brief Execute a Modbus write without acquiring bus_coord.
  *
- * Shared by ups_msg_callback() and the queue-drain path in process_callback.
- * Dispatches to the TCP or RTU client depending on unit->cfg->format.
- * On failure, logs the error and returns -1 (does NOT increment comm_fail_count
- * – a write failure is an operational error, not a connectivity loss).
+ * "locked" means the caller must already hold the bus (queue drain) or
+ * use write_registers_to_device() which wraps this with acquire / settle /
+ * release.  Dispatches to TCP or RTU depending on unit->cfg->format.
+ * On failure, logs and returns -1 (does NOT increment comm_fail_count –
+ * a write failure is an operational error, not a connectivity loss).
+ *
+ * @return 0 on success, -1 on failure.
  */
-static int write_registers_to_device(ups_unit_t *unit,
-                                     uint16_t    addr,
-                                     const uint16_t *values,
-                                     uint16_t    count,
-                                     ups_write_mode_t mode)
+static int write_registers_locked(ups_unit_t *unit,
+                                  uint16_t    addr,
+                                  const uint16_t *values,
+                                  uint16_t    count,
+                                  ups_write_mode_t mode)
 {
-    bool        is_tcp = (unit->cfg->format == MODBUS_FORMAT_TCP);
-    const char *path   = ups_bus_path(unit);
-    int         result;
+    bool is_tcp = (unit->cfg->format == MODBUS_FORMAT_TCP);
+    int  result;
 
     switch (mode) {
     case UPS_WRITE_MODE_FC06:
         if (count != 1) {
-            LOG_ERROR("[UPS] %s: FC06 requires count=1 (got %u) at 0x%04X.",
-                      unit->cfg->name, count, addr);
+            LOG_ERROR("[%s] %s: FC06 requires count=1 (got %u) at 0x%04X.",
+                      ups_log_tag(unit), unit->cfg->name, count, addr);
             return -1;
         }
-        bus_coord_acquire(path);
         result = is_tcp
                  ? mb_tcp_client_write_single_register(&unit->tcp_ctx, addr, values[0])
                  : mb_rtu_client_write_single_register(&unit->rtu_ctx, addr, values[0]);
-        bus_coord_release(path);
         break;
     case UPS_WRITE_MODE_FC16:
-        bus_coord_acquire(path);
         result = is_tcp
                  ? mb_tcp_client_write_multiple_registers(&unit->tcp_ctx, addr, count, values)
                  : mb_rtu_client_write_multiple_registers(&unit->rtu_ctx, addr, count, values);
-        bus_coord_release(path);
         break;
     case UPS_WRITE_MODE_AUTO:
     default:
-        bus_coord_acquire(path);
         if (count == 1) {
             result = is_tcp
                      ? mb_tcp_client_write_single_register(&unit->tcp_ctx, addr, values[0])
@@ -383,20 +393,61 @@ static int write_registers_to_device(ups_unit_t *unit,
                      ? mb_tcp_client_write_multiple_registers(&unit->tcp_ctx, addr, count, values)
                      : mb_rtu_client_write_multiple_registers(&unit->rtu_ctx, addr, count, values);
         }
-        bus_coord_release(path);
         break;
     }
 
     /* MB_TCP_CLIENT_OK and MB_RTU_CLIENT_OK are both 0. */
     if (result != 0) {
-        LOG_ERROR("[UPS] %s: write to 0x%04X failed (err %d).",
-                  unit->cfg->name, addr, result);
+        LOG_ERROR("[%s] %s: write to 0x%04X failed (err %d).",
+                  ups_log_tag(unit), unit->cfg->name, addr, result);
         return -1;
     }
 
-    LOG_DEBUG("[UPS] %s: wrote %u register(s) at 0x%04X.",
-              unit->cfg->name, count, addr);
+    if (count == 1) {
+        LOG_VERBOSE("[%s] %s: wrote register 0x%04X value=0x%04X.",
+                    ups_log_tag(unit), unit->cfg->name, addr, values[0]);
+    } else {
+        char val_buf[160];
+        size_t pos = 0;
+
+        val_buf[0] = '\0';
+        for (uint16_t i = 0; i < count; i++) {
+            int n = snprintf(val_buf + pos, sizeof(val_buf) - pos,
+                             "%s0x%04X", (i == 0) ? "" : " ", values[i]);
+            if (n < 0 || (size_t)n >= sizeof(val_buf) - pos) {
+                break;
+            }
+            pos += (size_t)n;
+        }
+
+        LOG_VERBOSE("[%s] %s: wrote %u register(s) at 0x%04X values=[%s].",
+                    ups_log_tag(unit), unit->cfg->name, count, addr, val_buf);
+    }
     return 0;
+}
+
+/**
+ * @brief Execute a Modbus write with bus ownership and post-write settle.
+ *
+ * Used by msg_callback (single-shot path).  Queue drain holds the bus
+ * itself and calls write_registers_locked() instead.  For TCP,
+ * ups_bus_path() is NULL so acquire/release are no-ops.
+ */
+static int write_registers_to_device(ups_unit_t *unit,
+                                     uint16_t    addr,
+                                     const uint16_t *values,
+                                     uint16_t    count,
+                                     ups_write_mode_t mode)
+{
+    const char *path = ups_bus_path(unit);
+
+    bus_coord_acquire(path);
+    int result = write_registers_locked(unit, addr, values, count, mode);
+    if (result == 0) {
+        usleep(UPS_POST_WRITE_SETTLE_US);
+    }
+    bus_coord_release(path);
+    return result;
 }
 
 /* ── Callbacks ────────────────────────────────────────────────────────── */
@@ -435,8 +486,8 @@ int ups_init_callback(module_config_t *cfg)
 /**
  * @brief process_callback – drain write queue, then read all mapped registers.
  *
- * Phase 1: drain the per-unit write queue.  Each queued command is executed
- *          as FC06 (single) or FC16 (multi) before the read scan begins.
+ * Phase 1: drain the per-unit write queue under one bus_coord hold so a
+ *          co-bus module cannot interleave until post-write settle completes.
  *          A write failure is logged but does not abort the read phase.
  *
  * Phase 2: consecutive device addresses are batched into one FC03 request.
@@ -460,11 +511,24 @@ int ups_process_callback(module_config_t *cfg)
 
     /* ── Phase 1: drain the write command queue ─────────────────────── */
     ups_write_cmd_t cmd;
-    while (queue_pop(&unit->cmd_queue, &cmd) == 0) {
-        if (write_registers_to_device(unit, cmd.addr, cmd.values, cmd.count, cmd.mode) != 0) {
-            LOG_WARNING("[UPS] %s: queued write to 0x%04X failed, "
-                        "continuing scan.", cfg->name, cmd.addr);
-        }
+    if (queue_pop(&unit->cmd_queue, &cmd) == 0) {
+        const char *path = ups_bus_path(unit);
+
+        bus_coord_acquire(path);
+
+        do {
+            if (write_registers_locked(unit, cmd.addr, cmd.values,
+                                       cmd.count, cmd.mode) != 0) {
+                LOG_WARNING("[%s] %s: queued write to 0x%04X failed, "
+                            "continuing scan.",
+                            ups_log_tag(unit), cfg->name, cmd.addr);
+            } else {
+                usleep(UPS_INTER_SEGMENT_DELAY_US);
+            }
+        } while (queue_pop(&unit->cmd_queue, &cmd) == 0);
+
+        usleep(UPS_POST_WRITE_SETTLE_US);
+        bus_coord_release(path);
     }
 
     /* ── Phase 2: segmented FC03 read scan ──────────────────────────── */
@@ -498,8 +562,8 @@ int ups_process_callback(module_config_t *cfg)
 
         if (result != 0) {
             unit->comm_fail_count++;
-            LOG_WARNING("[UPS] %s read 0x%04X len %u failed (err %d, fail %d/%d)",
-                        cfg->name, start, count, result,
+            LOG_WARNING("[%s] %s read 0x%04X len %u failed (err %d, fail %d/%d)",
+                        ups_log_tag(unit), cfg->name, start, count, result,
                         unit->comm_fail_count, UPS_COMM_FAIL_THRESHOLD);
 
             if (unit->comm_fail_count >= UPS_COMM_FAIL_THRESHOLD) {
@@ -507,7 +571,7 @@ int ups_process_callback(module_config_t *cfg)
                  * hardcoded address range, which could span into another
                  * device family's pool region. */
                 for (size_t k = 0; k < profile->table_count; k++) {
-                    pool_write_register(profile->table[k].pool_address, 0);
+                    pool_write_register(profile->table[k].pool_address, 0xFFFF);
                 }
                 return -1;
             }

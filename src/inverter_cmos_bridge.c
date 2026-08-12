@@ -17,6 +17,7 @@
  */
 
 #include "inverter_cmos_bridge.h"
+#include "config_loader.h"
 #include "inverter_module.h"
 #include "cmos.h"
 #include "device_register_map.h"
@@ -25,6 +26,7 @@
 
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -75,7 +77,10 @@ static void *cmos_sub_thread(void *arg);
 static void publish_pool_register(const module_config_t *cfg, const char *type, const char *key, uint16_t pool_address);
 static uint16_t duty_convert_frequency(uint16_t duty);
 static void publish_all_pool_register(const module_config_t *cfg);
+static void publish_additional_item(const module_config_t *cfg);
 static void pub_signal_handler(int sig);
+static void publish_frequency_cmd_duty(const module_config_t *cfg);
+static void publish_frequency_out_duty(const module_config_t *cfg);
 
 /* ── Public API ───────────────────────────────────────────────────────── */
 
@@ -132,6 +137,7 @@ void inverter_cmos_pub_run(void)
 
         for (int i = 0; i < global_config.inverter_count; i++) {
             publish_all_pool_register(&global_config.inverter[i]);
+            publish_additional_item(&global_config.inverter[i]);
         }
 
         usleep(BRIDGE_PUB_POLL_US);
@@ -184,7 +190,7 @@ static int on_write(uint8_t uid, uint16_t addr, uint16_t val)
 static void on_bypass_cmd(const char *topic, const char *value)
 {
     LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='bypass' value='%s'",
-                topic ? topic : "-", value ? value : "");
+                topic ? topic : NULL, value ? value : "");
 
     uint16_t bypass_bool_val = (uint16_t)strtoul(value, NULL, 0);
 
@@ -199,7 +205,7 @@ static void on_bypass_cmd(const char *topic, const char *value)
 static void on_init_inverter_cmd(const char *topic, const char *value)
 {
     LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='init' value='%s'",
-                topic ? topic : "-", value ? value : "");
+                topic ? topic : NULL, value ? value : "");
 
     uint16_t init_bool_val = (uint16_t)strtoul(value, NULL, 0);
 
@@ -214,19 +220,17 @@ static void on_init_inverter_cmd(const char *topic, const char *value)
 static void on_main_pump_duty_cmd(const char *topic, const char *value)
 {
     LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='main_pump' value='%s'",
-                topic ? topic : "-", value ? value : "");
+                topic ? topic : NULL, value ? value : "");
 
     uint16_t duty_val = (uint16_t)strtoul(value, NULL, 0);
-    LOG_DEBUG("[CMOS Bridge] Operation commands received register: 0x%04X duty:%u",dev_frequency_cmd_reg, duty_val);
 
     uint16_t frequency_val = duty_convert_frequency(duty_val);
-    LOG_DEBUG("[CMOS Bridge] duty value convert to frequency: 0x%04X(%u)", frequency_val, frequency_val);
 
-    if ( frequency_val == 0 ) {
+    if ( duty_val == 0 ) {
         uint16_t operation_cmd_val = INVERTER_STOP_BIT | INVERTER_ENABLE_ACCELERATION_BIT;
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_frequency_cmd_reg, frequency_val);
+        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_frequency_cmd_reg, duty_val);
         on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, operation_cmd_val);
-        LOG_INFO("[CMOS Bridge] Received stop command : %u" , frequency_val);
+        LOG_INFO("[CMOS Bridge] Received stop command : %u" , duty_val);
     } else {
         uint16_t operation_cmd_val = INVERTER_RUN_BIT | INVERTER_ENABLE_ACCELERATION_BIT;
         on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_frequency_cmd_reg, frequency_val);
@@ -238,7 +242,7 @@ static void on_main_pump_duty_cmd(const char *topic, const char *value)
 static void on_frequency_write_cmd(const char *topic, const char *value)
 {
     LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='inv_frequency_write_commands' value='%s'",
-                topic ? topic : "-", value ? value : "");
+                topic ? topic : NULL, value ? value : "");
 
     uint16_t frequency_val  = (uint16_t)strtoul(value, NULL, 0);
 
@@ -259,7 +263,7 @@ static void on_frequency_write_cmd(const char *topic, const char *value)
 static void on_operation_cmd(const char *topic, const char *value)
 {
     LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='inv_operation_commands' value='%s'",
-                topic ? topic : "-", value ? value : "");
+                topic ? topic : NULL, value ? value : "");
 
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
 
@@ -270,7 +274,7 @@ static void on_operation_cmd(const char *topic, const char *value)
 static void on_fault_control_cmd(const char *topic, const char *value)
 {
     LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='inv_fault_Control_commands' value='%s'",
-                topic ? topic : "-", value ? value : "");
+                topic ? topic : NULL, value ? value : "");
 
     uint16_t addr = int_fault_control_cmd_reg;
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
@@ -366,9 +370,9 @@ static void publish_pool_register(const module_config_t *cfg,
 
     LOG_VERBOSE("[Inverter CMOS] PUB topic='%s' state='%s' type='%s' key='%s' value='%s'",
                 BRIDGE_PUB_TOPIC,
-                state ? state : "-",
-                type ? type : "-",
-                key ? key : "-",
+                state ? state : NULL,
+                type ? type : NULL,
+                key ? key : NULL,
                 val_str);
 
     cmos_publish(state, type, key, val_str);
@@ -399,6 +403,25 @@ static void publish_pool_register(const module_config_t *cfg,
                               inverter1_profile.table[i].pool_address);
     }
 }
+
+/**
+ * @brief Publish the additional items to CMOS.
+ *
+ * @param cfg  Module configuration for the unit being published (only
+ *             used for its name and Alive/Disconnect connection_state;
+ *             the register set is inverter1_profile, the only Inverter
+ *             hardware model currently implemented).
+ */
+static void publish_additional_item(const module_config_t *cfg)
+{
+    if (!cfg || !cfg->enabled) {
+        return;
+    }
+
+    publish_frequency_cmd_duty(cfg);
+    publish_frequency_out_duty(cfg);
+}
+
 /**
  * @brief SIGTERM/SIGINT handler for the publisher child process.
  */
@@ -408,10 +431,120 @@ static void pub_signal_handler(int sig)
     g_pub_running = 0;
 }
 
+/**
+ * @brief Convert the duty to frequency.
+ *
+ * @param duty  Duty value.
+ * @return Frequency value.
+ */
 static uint16_t duty_convert_frequency(uint16_t duty)
 {
-    uint16_t upper = internal_pool[int_frequency_upper_limit_reg];
-    uint16_t lower = internal_pool[int_frequency_lower_limit_reg];
+    uint16_t upper = 0;
+    uint16_t lower = 0;
 
-    return lower + (uint32_t)(upper - lower) * duty / 1000;
+    pool_read_register(int_frequency_upper_limit_reg, &upper);
+    pool_read_register(int_frequency_lower_limit_reg, &lower);
+
+    if (upper <= lower) {
+        return lower;
+    }
+
+    if (duty >= 100) {
+        return upper;
+    }
+
+    return (uint16_t)(lower
+                      + ((uint32_t)(upper - lower) * duty) / 100u);
 }
+
+
+
+static uint16_t frequency_convert_duty(uint16_t frequency)
+{
+    uint16_t upper = 0;
+    uint16_t lower = 0;
+
+    pool_read_register(int_frequency_upper_limit_reg, &upper);
+    pool_read_register(int_frequency_lower_limit_reg, &lower);
+
+    if (upper <= lower) {
+        return 0;
+    }
+
+    if (frequency <= lower) {
+        return 0;
+    }
+
+    if (frequency >= upper) {
+        return 100;
+    }
+
+    uint32_t range = (uint32_t)(upper - lower);
+    uint32_t delta = (uint32_t)(frequency - lower);
+    return (uint16_t)((delta * 100u + range / 2u) / range);
+}
+
+/**
+ * @brief Publish the frequency command duty to CMOS.
+ *
+ * @param cfg  Module configuration for the unit being published (only
+ *             used for its name and Alive/Disconnect connection_state;
+ *             the register set is inverter1_profile, the only Inverter
+ *             hardware model currently implemented).
+ */
+static void publish_frequency_cmd_duty(const module_config_t *cfg)
+{
+    uint16_t frequency_cmd = 0;
+
+    pool_read_register(int_frequency_write_cmd_reg, &frequency_cmd);
+    uint16_t duty_frequency_cmd = frequency_convert_duty(frequency_cmd);
+    const char *state =
+    (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
+        ? "Alive"
+        : "Disconnect";
+
+    char val_str[8];
+    snprintf(val_str, sizeof(val_str), "%u", duty_frequency_cmd);
+
+    cmos_publish(state, NULL, "duty_command", val_str);
+    LOG_VERBOSE("[Inverter CMOS] PUB topic='%s' state='%s' type='%s' key='%s' value='%s'",
+                BRIDGE_PUB_TOPIC,
+                state ? state : NULL,
+                NULL,
+                "duty_command",
+                val_str);
+}
+
+/**
+ * @brief Publish the frequency output duty to CMOS.
+ *
+ * @param cfg  Module configuration for the unit being published (only
+ *             used for its name and Alive/Disconnect connection_state;
+ *             the register set is inverter1_profile, the only Inverter
+ *             hardware model currently implemented).
+ */
+static void publish_frequency_out_duty(const module_config_t *cfg)
+{
+    uint16_t frequency_out = 0;
+
+    pool_read_register(int_out_frequency_reg, &frequency_out);
+    
+    uint16_t duty_frequency_out = frequency_convert_duty(frequency_out);
+
+    const char *state =
+    (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
+        ? "Alive"
+        : "Disconnect";
+
+    char val_str[8];
+    snprintf(val_str, sizeof(val_str), "%u", duty_frequency_out);
+
+    cmos_publish(state, NULL, "output_duty", val_str);
+    LOG_VERBOSE("[Inverter CMOS] PUB topic='%s' state='%s' type='%s' key='%s' value='%s'",
+                BRIDGE_PUB_TOPIC,
+                state ? state : NULL,
+                NULL,
+                "output_duty",
+                val_str);
+}
+
