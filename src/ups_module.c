@@ -313,7 +313,7 @@ static int unit_connect(ups_unit_t *unit)
 }
 
 /**
- * @brief Disconnect the unit's transport (TCP socket or RTU serial port).
+ * @brief disconnect the unit's transport (TCP socket or RTU serial port).
  */
 static void unit_disconnect(ups_unit_t *unit)
 {

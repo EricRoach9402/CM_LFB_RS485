@@ -9,7 +9,7 @@
  *
  * Child process (inverter_cmos_pub_run, started from main):
  *  - Periodic publisher on BRIDGE_PUB_TOPIC; reads internal_pool[] and
- *    shared_connection_state_get() for Alive/Disconnect.
+ *    shared_connection_state_get() for alive/disconnect.
  *
  * cmos_sub_spin_ctx() cannot be stopped gracefully (it loops on while(1)).
  * pthread_cancel() is used; epoll_wait() is a POSIX cancellation point so the
@@ -81,6 +81,7 @@ static void publish_additional_item(const module_config_t *cfg);
 static void pub_signal_handler(int sig);
 static void publish_frequency_cmd_duty(const module_config_t *cfg);
 static void publish_frequency_out_duty(const module_config_t *cfg);
+static void publish_fault_warning_code(const module_config_t *cfg);
 
 /* ── Public API ───────────────────────────────────────────────────────── */
 
@@ -356,8 +357,8 @@ static void publish_pool_register(const module_config_t *cfg,
 
     const char *state =
         (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
-            ? "Alive"
-            : "Disconnect";
+            ? "alive"
+            : "disconnect";
 
     if (!pool_read_register(pool_address, &val)) {
         LOG_WARNING("[CMOS Bridge] publish_pool_register: "
@@ -387,7 +388,7 @@ static void publish_pool_register(const module_config_t *cfg,
  * used as the CMOS key and table[i].pool_address selects the value.
  *
  * @param cfg  Module configuration for the unit being published (only
- *             used for its name and Alive/Disconnect connection_state;
+ *             used for its name and alive/disconnect connection_state;
  *             the register set is inverter1_profile, the only Inverter
  *             hardware model currently implemented).
  */
@@ -408,7 +409,7 @@ static void publish_pool_register(const module_config_t *cfg,
  * @brief Publish the additional items to CMOS.
  *
  * @param cfg  Module configuration for the unit being published (only
- *             used for its name and Alive/Disconnect connection_state;
+ *             used for its name and alive/disconnect connection_state;
  *             the register set is inverter1_profile, the only Inverter
  *             hardware model currently implemented).
  */
@@ -420,6 +421,7 @@ static void publish_additional_item(const module_config_t *cfg)
 
     publish_frequency_cmd_duty(cfg);
     publish_frequency_out_duty(cfg);
+    publish_fault_warning_code(cfg);
 }
 
 /**
@@ -488,7 +490,7 @@ static uint16_t frequency_convert_duty(uint16_t frequency)
  * @brief Publish the frequency command duty to CMOS.
  *
  * @param cfg  Module configuration for the unit being published (only
- *             used for its name and Alive/Disconnect connection_state;
+ *             used for its name and alive/disconnect connection_state;
  *             the register set is inverter1_profile, the only Inverter
  *             hardware model currently implemented).
  */
@@ -500,8 +502,8 @@ static void publish_frequency_cmd_duty(const module_config_t *cfg)
     uint16_t duty_frequency_cmd = frequency_convert_duty(frequency_cmd);
     const char *state =
     (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
-        ? "Alive"
-        : "Disconnect";
+        ? "alive"
+        : "disconnect";
 
     char val_str[8];
     snprintf(val_str, sizeof(val_str), "%u", duty_frequency_cmd);
@@ -519,7 +521,7 @@ static void publish_frequency_cmd_duty(const module_config_t *cfg)
  * @brief Publish the frequency output duty to CMOS.
  *
  * @param cfg  Module configuration for the unit being published (only
- *             used for its name and Alive/Disconnect connection_state;
+ *             used for its name and alive/disconnect connection_state;
  *             the register set is inverter1_profile, the only Inverter
  *             hardware model currently implemented).
  */
@@ -533,8 +535,8 @@ static void publish_frequency_out_duty(const module_config_t *cfg)
 
     const char *state =
     (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
-        ? "Alive"
-        : "Disconnect";
+        ? "alive"
+        : "disconnect";
 
     char val_str[8];
     snprintf(val_str, sizeof(val_str), "%u", duty_frequency_out);
@@ -548,3 +550,36 @@ static void publish_frequency_out_duty(const module_config_t *cfg)
                 val_str);
 }
 
+static void publish_fault_warning_code(const module_config_t *cfg)
+{
+    uint16_t raw_value = 0;
+    pool_read_register(int_fault_warning_code_reg, &raw_value);
+
+    uint16_t fault_code_val = raw_value & 0xFF;
+    uint16_t warning_code_val = (raw_value >> 8) & 0xFF;
+
+    const char *state =
+    (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
+        ? "alive"
+        : "disconnect";
+    char fault_val_str[8];
+    char warning_val_str[8];
+    snprintf(fault_val_str, sizeof(fault_val_str), "%u", fault_code_val);
+    snprintf(warning_val_str, sizeof(warning_val_str), "%u", warning_code_val);
+
+    cmos_publish(state, NULL, "fault_code", fault_val_str);
+    LOG_VERBOSE("[Inverter CMOS] PUB topic='%s' state='%s' type='%s' key='%s' value='%s'",
+        BRIDGE_PUB_TOPIC,
+        state ? state : NULL,
+        NULL,
+        "fault_code",
+        fault_val_str);
+
+    cmos_publish(state, NULL, "warning_code", warning_val_str);
+    LOG_VERBOSE("[Inverter CMOS] PUB topic='%s' state='%s' type='%s' key='%s' value='%s'",
+                BRIDGE_PUB_TOPIC,
+                state ? state : NULL,
+                NULL,
+                "warning_code",
+                warning_val_str);
+}

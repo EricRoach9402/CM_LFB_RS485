@@ -95,36 +95,36 @@ const device_map_profile_t inverter1_profile = {
 };
 
 // int RW
-const uint16_t int_frequency_cmd_souce_reg = 0xB014;
-const uint16_t int_run_cmd_souce_reg = 0xB015;
+const uint16_t int_frequency_cmd_souce_reg = 0xB014; //0xB014
+const uint16_t int_run_cmd_souce_reg = 0xB015; //0xB015
 
-const uint16_t int_frequency_upper_limit_reg = 0xB10A;
-const uint16_t int_frequency_lower_limit_reg = 0xB10B;
-const uint16_t int_acceleration_1_reg = 0xB10C;
-const uint16_t int_Deceleration_1_reg = 0xB10D;
+const uint16_t int_frequency_upper_limit_reg = 0xB10A; //0xB10A
+const uint16_t int_frequency_lower_limit_reg = 0xB10B; //0xB10B
+const uint16_t int_acceleration_1_reg = 0xB10C; //0xB10C
+const uint16_t int_Deceleration_1_reg = 0xB10D; //0xB10D
 
-const uint16_t int_slave_id_reg = 0xB900;
-const uint16_t int_baud_rate_reg = 0xB901;
-const uint16_t int_modbust_error_handle_reg = 0xB902;
-const uint16_t int_modbust_timeout_setting_reg = 0xB903;
-const uint16_t int_modbus_serial_format_reg = 0xB904;
+const uint16_t int_slave_id_reg = 0xB900; //0xB900
+const uint16_t int_baud_rate_reg = 0xB901; //0xB901
+const uint16_t int_modbust_error_handle_reg = 0xB902; //0xB902
+const uint16_t int_modbust_timeout_setting_reg = 0xB903; //0xB903
+const uint16_t int_modbus_serial_format_reg = 0xB904; //0xB904
 
-const uint16_t int_operation_cmd_reg = 0xD000;
-const uint16_t int_frequency_write_cmd_reg = 0xD001; 
-const uint16_t int_fault_control_cmd_reg = 0xD002;
+const uint16_t int_operation_cmd_reg = 0xD000; //0xD000
+const uint16_t int_frequency_write_cmd_reg = 0xD001; //0xD001
+const uint16_t int_fault_control_cmd_reg = 0xD002; //0xD002
 
 // int RO
-const uint16_t int_firmware_version_reg = 0xB006;
+const uint16_t int_firmware_version_reg = 0xB006; //0xB006
 
-const uint16_t int_fault_warning_code_reg = 0xD100;
-const uint16_t int_operation_status_reg = 0xD101;
-const uint16_t int_frequency_read_cmd_reg = 0xD102;
-const uint16_t int_out_frequency_reg = 0xD103;
-const uint16_t int_out_current_reg = 0xD104;
-const uint16_t int_dc_bus_voltage_reg = 0xD105;
+const uint16_t int_fault_warning_code_reg = 0xD100; //0xD100
+const uint16_t int_operation_status_reg = 0xD101; //0xD101
+const uint16_t int_frequency_read_cmd_reg = 0xD102; //0xD102
+const uint16_t int_out_frequency_reg = 0xD103; //0xD103
+const uint16_t int_out_current_reg = 0xD104; //0xD104
+const uint16_t int_dc_bus_voltage_reg = 0xD105; //0xD105
 
-const uint16_t int_motor_actual_speed_reg = 0xD10C;
-const uint16_t int_pid_feedback_value_reg = 0xD10A;
+const uint16_t int_motor_actual_speed_reg = 0xD10C; //0xD10C
+const uint16_t int_pid_feedback_value_reg = 0xD10A; //0xD10A
 
 // device RW
 const uint16_t dev_frequency_cmd_souce_reg = 0x0014; //0x0014

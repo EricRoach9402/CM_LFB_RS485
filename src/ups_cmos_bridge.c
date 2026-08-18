@@ -7,7 +7,7 @@
  *
  * Child process (ups_cmos_pub_run, started from main):
  *  - Periodic publisher on BRIDGE_PUB_TOPIC; reads internal_pool[] and
- *    shared_connection_state_get() for Alive/Disconnect.
+ *    shared_connection_state_get() for alive/disconnect.
  *
  * cmos_sub_spin_ctx() cannot be stopped gracefully (it loops on while(1)).
  * pthread_cancel() is used; epoll_wait() is a POSIX cancellation point so the
@@ -254,8 +254,8 @@ static void publish_pool_register(const module_config_t *cfg,
 
     const char *state =
         (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
-            ? "Alive"
-            : "Disconnect";
+            ? "alive"
+            : "disconnect";
 
     if (!pool_read_register(pool_address, &val)) {
         LOG_WARNING("[CMOS Bridge] publish_pool_register: "
@@ -285,7 +285,7 @@ static void publish_pool_register(const module_config_t *cfg,
  * used as the CMOS key and table[i].pool_address selects the value.
  *
  * @param cfg  Module configuration for the unit being published (only
- *             used for its name and Alive/Disconnect connection_state;
+ *             used for its name and alive/disconnect connection_state;
  *             the register set is ups1_profile, the only UPS hardware
  *             model currently implemented).
  */
