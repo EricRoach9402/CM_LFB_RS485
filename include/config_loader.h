@@ -12,7 +12,7 @@
 
 #include "modbus_defines.h"
 
-#define LOOP_CHARGER_INVERTER_VERSION "0.0.1"
+#define CM_LFB_RS485_VERSION "0.0.1"
 #define MAX_INVERTER_COUNT            10
 #define MAX_UPS_COUNT                 10
 

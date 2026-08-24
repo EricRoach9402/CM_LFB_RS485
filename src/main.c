@@ -183,8 +183,8 @@ int main(int argc, char **argv)
     log_level_t  log_level   = LOG_LEVEL_INFO;
 
     LOG_INFO("***************************************");
-    LOG_INFO(" CM LFB_inverter  version: %s",
-             LOOP_CHARGER_INVERTER_VERSION);
+    LOG_INFO(" CM LFB_RS485  version: %s",
+             CM_LFB_RS485_VERSION);
     LOG_INFO("***************************************");
 
     parse_arguments(argc, argv, &config_path, &log_level);

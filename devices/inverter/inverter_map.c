@@ -72,14 +72,14 @@ static const device_register_mapping_t inverter1_mapping_table[] = {
 
     { 0x2000,  0xD000,  ACCESS_RW,  "operation_commands" },
     { 0x2001,  0xD001,  ACCESS_RW,  "frequency_write_commands" },
-    { 0x2002,  0xD002,  ACCESS_RW,  "fault_Control_commands" },
+    { 0x2002,  0xD002,  ACCESS_RW,  "fault_control_commands" },
 
     { 0x2100,  0xD100,  ACCESS_RO,  "fault_warning_code" },
     { 0x2101,  0xD101,  ACCESS_RO,  "inverter_operating_status" },
     { 0x2102,  0xD102,  ACCESS_RO,  "frequency_read_command" },
     { 0x2103,  0xD103,  ACCESS_RO,  "output_frequency" },
     { 0x2104,  0xD104,  ACCESS_RO,  "output_current" },
-    { 0x2105,  0xD105,  ACCESS_RO,  "dc_Bus_voltage" },
+    { 0x2105,  0xD105,  ACCESS_RO,  "dc_bus_voltage" },
 
     { 0x210C,  0xD10C,  ACCESS_RO,  "motor_actual_speed" },
 

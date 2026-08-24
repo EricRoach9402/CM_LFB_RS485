@@ -22,7 +22,7 @@ system_config_t global_config;
 char            global_config_path[256] = {0};
 
 static const char version[] __attribute__((used)) =
-    "VERSION:" LOOP_CHARGER_INVERTER_VERSION;
+    "VERSION:" CM_LFB_RS485_VERSION;
 
 
 /**
