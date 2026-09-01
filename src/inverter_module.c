@@ -191,6 +191,32 @@ int stop_inverter_modules(void)
 }
 
 /**
+ * @brief Resolve the modbus_uid of the first running Inverter unit.
+ *
+ * Read-only access to the registry filled by start_inverter_modules(); the
+ * CMOS bridge thread is the only caller and runs after registration.
+ *
+ * @return 0 on success, -1 if no unit is running.
+ */
+int inverter_get_primary_uid(uint8_t *out_uid)
+{
+    if (!out_uid) {
+        return -1;
+    }
+
+    for (int i = 0; i < inverter_unit_count; i++) {
+        if (!inverter_units[i].cfg) {
+            continue;
+        }
+
+        *out_uid = (uint8_t)inverter_units[i].cfg->modbus_uid;
+        return 0;
+    }
+
+    return -1;
+}
+
+/**
  * @brief Enqueue a write command for the Inverter unit identified by uid.
  *
  * Called from the CMOS bridge thread.  Thread-safe via per-unit queue mutex.

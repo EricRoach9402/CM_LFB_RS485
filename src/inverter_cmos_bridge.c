@@ -17,6 +17,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -30,11 +31,10 @@
 #define BRIDGE_PUB_TOPIC        "inverter"
 #define BRIDGE_PUB_POLL_US      500000u
 
-/* First enabled Inverter in config (single-unit deployment). */
-#define INVERTER_BRIDGE_DEFAULT_UID  ((uint8_t)global_config.inverter[0].modbus_uid)
 static pthread_t             g_sub_thread;
 static volatile sig_atomic_t g_pub_running = 0;
 
+static bool resolve_target_uid(uint8_t *out_uid);
 static int on_write(uint8_t uid, uint16_t addr, uint16_t val);
 static void on_bypass_cmd(const char *topic, const char *value);
 static void on_init_inverter_cmd(const char *topic, const char *value);
@@ -110,6 +110,24 @@ void inverter_cmos_pub_run(void)
     LOG_INFO("[CMOS Bridge] publisher process exiting.");
 }
 
+/**
+ * @brief Resolve the Inverter unit that an incoming HMI command targets.
+ *
+ * Queries the module registry instead of a config array index, so commands
+ * are dropped rather than sent to a uid that was never started.
+ *
+ * @return true if a running unit was found.
+ */
+static bool resolve_target_uid(uint8_t *out_uid)
+{
+    if (inverter_get_primary_uid(out_uid) != 0) {
+        LOG_WARNING("[CMOS Bridge] no running Inverter unit; command dropped.");
+        return false;
+    }
+
+    return true;
+}
+
 static int on_write(uint8_t uid, uint16_t addr, uint16_t val)
 {
     const device_register_mapping_t *entry =
@@ -144,11 +162,16 @@ static void on_bypass_cmd(const char *topic, const char *value)
 
     uint16_t bypass_bool_val = (uint16_t)strtoul(value, NULL, 0);
 
+    uint8_t target_uid = 0;
+    if (!resolve_target_uid(&target_uid)) {
+        return;
+    }
+
     if ( bypass_bool_val == 1 ) {
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_fault_control_cmd_reg, INVERTER_FIRE_MODE_BIT);
+        on_write(target_uid, dev_fault_control_cmd_reg, INVERTER_FIRE_MODE_BIT);
         LOG_INFO("[CMOS Bridge] Received enable bypass command : %u" , bypass_bool_val);
     } else {
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_fault_control_cmd_reg, INVERTER_EF_BIT);
+        on_write(target_uid, dev_fault_control_cmd_reg, INVERTER_EF_BIT);
         LOG_INFO("[CMOS Bridge] Received cancel bypass command : %u" , bypass_bool_val);
     }
 }
@@ -164,7 +187,12 @@ static void on_init_inverter_cmd(const char *topic, const char *value)
         return;
     }
 
-    inverter_init_request(INVERTER_BRIDGE_DEFAULT_UID);
+    uint8_t target_uid = 0;
+    if (!resolve_target_uid(&target_uid)) {
+        return;
+    }
+
+    inverter_init_request(target_uid);
     LOG_INFO("[CMOS Bridge] Received init command : %u" , init_bool_val);
 }
 
@@ -177,15 +205,20 @@ static void on_main_pump_duty_cmd(const char *topic, const char *value)
 
     uint16_t frequency_val = duty_convert_frequency(duty_val);
 
+    uint8_t target_uid = 0;
+    if (!resolve_target_uid(&target_uid)) {
+        return;
+    }
+
     if ( duty_val == 0 ) {
         uint16_t operation_cmd_val = INVERTER_STOP_BIT | INVERTER_ENABLE_ACCELERATION_BIT;
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_frequency_cmd_reg, duty_val);
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, operation_cmd_val);
+        on_write(target_uid, dev_frequency_cmd_reg, duty_val);
+        on_write(target_uid, dev_operation_cmd_reg, operation_cmd_val);
         LOG_INFO("[CMOS Bridge] Received stop command : %u" , duty_val);
     } else {
         uint16_t operation_cmd_val = INVERTER_RUN_BIT | INVERTER_ENABLE_ACCELERATION_BIT;
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_frequency_cmd_reg, frequency_val);
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, operation_cmd_val);
+        on_write(target_uid, dev_frequency_cmd_reg, frequency_val);
+        on_write(target_uid, dev_operation_cmd_reg, operation_cmd_val);
         LOG_INFO("[CMOS Bridge] Received run command : %u" , frequency_val);
     }
 }
@@ -197,16 +230,20 @@ static void on_frequency_write_cmd(const char *topic, const char *value)
 
     uint16_t frequency_val  = (uint16_t)strtoul(value, NULL, 0);
 
-    
+    uint8_t target_uid = 0;
+    if (!resolve_target_uid(&target_uid)) {
+        return;
+    }
+
     if ( frequency_val == 0 ) {
         uint16_t operation_cmd_val = INVERTER_STOP_BIT | INVERTER_ENABLE_ACCELERATION_BIT;
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_frequency_cmd_reg, frequency_val);
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, operation_cmd_val);
+        on_write(target_uid, dev_frequency_cmd_reg, frequency_val);
+        on_write(target_uid, dev_operation_cmd_reg, operation_cmd_val);
         LOG_INFO("[CMOS Bridge] Received stop command : %u" , frequency_val);
     } else {
         uint16_t operation_cmd_val = INVERTER_RUN_BIT | INVERTER_ENABLE_ACCELERATION_BIT;
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_frequency_cmd_reg, frequency_val);
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, operation_cmd_val);
+        on_write(target_uid, dev_frequency_cmd_reg, frequency_val);
+        on_write(target_uid, dev_operation_cmd_reg, operation_cmd_val);
         LOG_INFO("[CMOS Bridge] Received run command : %u" , frequency_val);
     }
 }
@@ -218,7 +255,12 @@ static void on_operation_cmd(const char *topic, const char *value)
 
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
 
-    on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_operation_cmd_reg, val);
+    uint8_t target_uid = 0;
+    if (!resolve_target_uid(&target_uid)) {
+        return;
+    }
+
+    on_write(target_uid, dev_operation_cmd_reg, val);
     LOG_INFO("[CMOS Bridge] Operation commands received register: '%4x' value:'%s'",dev_operation_cmd_reg, value);
 }
 
@@ -230,7 +272,12 @@ static void on_fault_control_cmd(const char *topic, const char *value)
     uint16_t addr = dev_fault_control_cmd_reg;
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
 
-    on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
+    uint8_t target_uid = 0;
+    if (!resolve_target_uid(&target_uid)) {
+        return;
+    }
+
+    on_write(target_uid, addr, val);
     LOG_INFO("[CMOS Bridge] Operation commands received register: '%4x' value:'%s'",addr, value);
 }
 

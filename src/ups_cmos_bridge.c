@@ -15,6 +15,7 @@
 
 #include <pthread.h>
 #include <signal.h>
+#include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -29,12 +30,10 @@
 #define BRIDGE_PUB_TOPIC        "ups"
 #define BRIDGE_PUB_POLL_US      500000u
 
-/* First enabled UPS in config (single-unit deployment). */
-#define UPS_BRIDGE_DEFAULT_UID  ((uint8_t)global_config.ups[0].modbus_uid)
-
 static pthread_t             g_sub_thread;
 static volatile sig_atomic_t g_pub_running = 0;
 
+static bool resolve_target_uid(uint8_t *out_uid);
 static void on_init_ups_cmd(const char *topic, const char *value);
 static void cleanup_sub_ctx(void *arg);
 static void *cmos_sub_thread(void *arg);
@@ -103,6 +102,24 @@ void ups_cmos_pub_run(void)
     LOG_INFO("[CMOS Bridge] publisher process exiting.");
 }
 
+/**
+ * @brief Resolve the UPS unit that an incoming HMI command targets.
+ *
+ * Queries the module registry instead of a config array index, so commands
+ * are dropped rather than sent to a uid that was never started.
+ *
+ * @return true if a running unit was found.
+ */
+static bool resolve_target_uid(uint8_t *out_uid)
+{
+    if (ups_get_primary_uid(out_uid) != 0) {
+        LOG_WARNING("[CMOS Bridge] no running UPS unit; command dropped.");
+        return false;
+    }
+
+    return true;
+}
+
 static void on_init_ups_cmd(const char *topic, const char *value)
 {
     LOG_VERBOSE("[UPS CMOS] SUB topic='%s' key='init' value='%s'",
@@ -115,7 +132,12 @@ static void on_init_ups_cmd(const char *topic, const char *value)
         return;
     }
 
-    ups_init_request(UPS_BRIDGE_DEFAULT_UID);
+    uint8_t target_uid = 0;
+    if (!resolve_target_uid(&target_uid)) {
+        return;
+    }
+
+    ups_init_request(target_uid);
     LOG_INFO("[CMOS Bridge] Received init command : %u", init_bool_val);
 }
 

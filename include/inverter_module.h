@@ -41,6 +41,20 @@ int stop_inverter_modules(void);
 /* ── CMOS bridge command interface ────────────────────────────────────── */
 
 /**
+ * @brief Resolve the modbus_uid of the first running Inverter unit.
+ *
+ * Reflects the units actually registered by start_inverter_modules(), so
+ * entries that are disabled in config.json are never selected.
+ *
+ * Parent process only: the forked CMOS publisher child holds no unit
+ * registry and always gets -1.
+ *
+ * @param out_uid  Destination for the resolved modbus_uid.
+ * @return 0 on success, -1 if no unit is running.
+ */
+int inverter_get_primary_uid(uint8_t *out_uid);
+
+/**
  * @brief Modbus write function-code selection for inverter_cmd_push().
  *
  *  INVERTER_WRITE_MODE_AUTO – count == 1 → FC06, count > 1 → FC16

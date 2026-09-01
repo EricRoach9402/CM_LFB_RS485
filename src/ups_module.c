@@ -843,6 +843,32 @@ int stop_ups_modules(void)
 }
 
 /**
+ * @brief Resolve the modbus_uid of the first running UPS unit.
+ *
+ * Read-only access to the registry filled by start_ups_modules(); the CMOS
+ * bridge thread is the only caller and runs after registration.
+ *
+ * @return 0 on success, -1 if no unit is running.
+ */
+int ups_get_primary_uid(uint8_t *out_uid)
+{
+    if (!out_uid) {
+        return -1;
+    }
+
+    for (int i = 0; i < ups_unit_count; i++) {
+        if (!ups_units[i].cfg) {
+            continue;
+        }
+
+        *out_uid = (uint8_t)ups_units[i].cfg->modbus_uid;
+        return 0;
+    }
+
+    return -1;
+}
+
+/**
  * @brief Enqueue a write command for the UPS unit identified by uid.
  *
  * Called from the CMOS bridge thread.  Thread-safe via per-unit queue mutex.

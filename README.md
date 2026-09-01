@@ -136,12 +136,12 @@ Built-in **one profile / pool per device family**. Do not add a 2nd unit in conf
 | UPS | `ups1_profile` | `0xA200` |
 
 ```c
-// bridge / alarm currently bind global_config.*[0]
-#define INVERTER_BRIDGE_DEFAULT_UID  global_config.inverter[0].modbus_uid
-#define UPS_BRIDGE_DEFAULT_UID       global_config.ups[0].modbus_uid
+// bridge commands target the first unit actually registered by start_*_modules()
+int inverter_get_primary_uid(uint8_t *out_uid);
+int ups_get_primary_uid(uint8_t *out_uid);
 ```
 
-Adding a 2nd unit also requires bridge command routing and alarm registration updates (currently hardcoded to `[0]`).
+Adding a 2nd unit still needs a new profile + pool, CMOS per-unit routing (bridge currently sends commands to the first registered unit), and alarm ctx updates (still a single profile).
 
 ### Init flag (operator-triggered)
 
@@ -190,7 +190,7 @@ lib/           modbus, cmos, device_map, alarm, sqlite
 □ devices/<name>/<name>_map.h   — new profile
 □ config.json                   — new entry (uid / path / baud)
 □ *_module.c                    — bind profile
-□ *_cmos_bridge.c               — command routing (currently binds [0])
+□ *_cmos_bridge.c               — command routing (currently first registered unit)
 □ *_alarm.c                     — alarm ctx (if needed)
 ```
 
