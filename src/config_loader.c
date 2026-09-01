@@ -3,25 +3,66 @@
  * @brief Load config.json into global_config.
  */
 
+#include <json-c/json.h>
+#include <json-c/json_object.h>
+#include <json-c/json_util.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <json-c/json.h>
-#include <json-c/json_util.h>
-#include <json-c/json_object.h>
 
 #include "config_loader.h"
 #include "log.h"
 
 system_config_t global_config;
-char            global_config_path[256] = {0};
+char global_config_path[256] = {0};
 
 static const char version[] __attribute__((used)) =
     "VERSION:" CM_LFB_RS485_VERSION;
 
+static modbus_format_t parse_modbus_format(const char *format_str);
+static bool parse_modbus_role(const char *modbus_role);
+static void load_module_config(json_object *json_obj, module_config_t *config);
+static void load_inverter_config(json_object *inverter_array);
+static void load_ups_config(json_object *ups_array);
 
 /**
- * @brief Parse Modbus format from a JSON string ("RTU" or "TCP").
+ * @brief Load config.json into global_config.
+ * @param json_path Path to the JSON file.
+ */
+void load_json_config(const char *json_path)
+{
+    json_object *json_config = NULL;
+    json_object *inverter_array = NULL;
+    json_object *ups_array = NULL;
+
+    json_config = json_object_from_file(json_path);
+    if (!json_config) {
+        LOG_ERROR("Failed to load JSON configuration file: %s", json_path);
+        exit(EXIT_FAILURE);
+    }
+
+    strncpy(global_config_path, json_path, sizeof(global_config_path) - 1);
+    global_config_path[sizeof(global_config_path) - 1] = '\0';
+
+    memset(&global_config, 0, sizeof(global_config));
+
+    if (json_object_object_get_ex(json_config, "INVERTER", &inverter_array)) {
+        load_inverter_config(inverter_array);
+    }
+
+    if (json_object_object_get_ex(json_config, "UPS", &ups_array)) {
+        load_ups_config(ups_array);
+    }
+
+    json_object_put(json_config);
+
+    LOG_INFO("Configuration successfully loaded from %s", json_path);
+}
+
+/**
+ * @brief Parse Modbus format string.
+ * @param format_str Format string from JSON.
+ * @return Parsed format; defaults to RTU on error.
  */
 static modbus_format_t parse_modbus_format(const char *format_str)
 {
@@ -36,7 +77,9 @@ static modbus_format_t parse_modbus_format(const char *format_str)
 }
 
 /**
- * @brief Parse modbus_role string and return true when the role is server/master.
+ * @brief Parse modbus_role string.
+ * @param modbus_role Role string from JSON.
+ * @return true for Server/Master, false otherwise.
  */
 static bool parse_modbus_role(const char *modbus_role)
 {
@@ -53,7 +96,9 @@ static bool parse_modbus_role(const char *modbus_role)
 }
 
 /**
- * @brief Populate one module_config_t from a JSON object.
+ * @brief Populate one module_config_t from JSON.
+ * @param json_obj Source JSON object.
+ * @param config Destination config.
  */
 static void load_module_config(json_object *json_obj, module_config_t *config)
 {
@@ -92,9 +137,7 @@ static void load_module_config(json_object *json_obj, module_config_t *config)
                 sizeof(config->gpio) - 1);
     }
 
-    /* baud_rate/path (RTU) and ip/port (TCP) share storage; only the
-     * member matching config->format is meaningful, so only parse that
-     * branch to avoid one format's fields clobbering the other's memory. */
+    /* RTU/TCP fields share union storage; parse by format only. */
     if (config->format == MODBUS_FORMAT_TCP) {
         if (json_object_object_get_ex(json_obj, "ip", &field)) {
             strncpy(config->ip, json_object_get_string(field),
@@ -117,7 +160,8 @@ static void load_module_config(json_object *json_obj, module_config_t *config)
 }
 
 /**
- * @brief Load enabled Inverter entries from the JSON "INVERTER" array.
+ * @brief Load enabled Inverter entries from JSON.
+ * @param inverter_array INVERTER array object.
  */
 static void load_inverter_config(json_object *inverter_array)
 {
@@ -127,11 +171,11 @@ static void load_inverter_config(json_object *inverter_array)
         return;
     }
 
-    int valid_count  = 0;
+    int valid_count = 0;
     int array_length = json_object_array_length(inverter_array);
 
     for (int i = 0; i < array_length; i++) {
-        json_object *inv_obj     = json_object_array_get_idx(inverter_array, i);
+        json_object *inv_obj = json_object_array_get_idx(inverter_array, i);
         json_object *enabled_obj = NULL;
 
         if (!json_object_object_get_ex(inv_obj, "enabled", &enabled_obj) ||
@@ -154,7 +198,8 @@ static void load_inverter_config(json_object *inverter_array)
 }
 
 /**
- * @brief Load enabled UPS entries from the JSON "UPS" array.
+ * @brief Load enabled UPS entries from JSON.
+ * @param ups_array UPS array object.
  */
 static void load_ups_config(json_object *ups_array)
 {
@@ -163,12 +208,12 @@ static void load_ups_config(json_object *ups_array)
         return;
     }
 
-    int valid_count  = 0;
+    int valid_count = 0;
     int array_length = json_object_array_length(ups_array);
 
     for (int i = 0; i < array_length; i++) {
-        json_object *ups_obj      = json_object_array_get_idx(ups_array, i);
-        json_object *enabled_obj  = NULL;
+        json_object *ups_obj = json_object_array_get_idx(ups_array, i);
+        json_object *enabled_obj = NULL;
 
         if (!json_object_object_get_ex(ups_obj, "enabled", &enabled_obj) ||
             !json_object_get_boolean(enabled_obj)) {
@@ -187,39 +232,4 @@ static void load_ups_config(json_object *ups_array)
     }
 
     global_config.ups_count = valid_count;
-}
-
-/**
- * @brief Load and process the JSON configuration file.
- *
- * @param json_path  Path to the JSON configuration file.
- */
-void load_json_config(const char *json_path)
-{
-    json_object *json_config     = NULL;
-    json_object *inverter_array  = NULL;
-    json_object *ups_array       = NULL;
-
-    json_config = json_object_from_file(json_path);
-    if (!json_config) {
-        LOG_ERROR("Failed to load JSON configuration file: %s", json_path);
-        exit(EXIT_FAILURE);
-    }
-
-    strncpy(global_config_path, json_path, sizeof(global_config_path) - 1);
-    global_config_path[sizeof(global_config_path) - 1] = '\0';
-
-    memset(&global_config, 0, sizeof(global_config));
-
-    if (json_object_object_get_ex(json_config, "INVERTER", &inverter_array)) {
-        load_inverter_config(inverter_array);
-    }
-
-    if (json_object_object_get_ex(json_config, "UPS", &ups_array)) {
-        load_ups_config(ups_array);
-    }
-
-    json_object_put(json_config);
-
-    LOG_INFO("Configuration successfully loaded from %s", json_path);
 }

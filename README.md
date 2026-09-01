@@ -8,7 +8,7 @@ x86/cm_LFB   or   arm/cm_LFB
 
 ---
 
-## ⚙️ Environment
+## Environment
 
 ### First-time setup
 
@@ -61,7 +61,7 @@ make ARCH=arm JSONC_ARM_LIB=... JSONC_ARM_INC=...   # custom SDK
 
 ---
 
-## 🚀 Core features
+## Core features
 
 ```
 config.json
@@ -82,10 +82,10 @@ config.json
 
 | Module | Transport | Notes |
 |--------|-----------|-------|
-| **Inverter** | RTU only | FC03 poll, FC06/16 writes, HMI command queue |
+| **Inverter** | RTU only | FC03 poll, FC06/16 writes, HMI command queue; no TCP |
 | **UPS** | RTU / TCP | FC03 poll (profile is all RO) |
 | **CMOS bridge** | IPC | parent: subscriber; child: publisher (fork) |
-| **Alarm** | pool watch | fault / warning register changes → DB |
+| **Alarm** | pool watch | `ALARM_COND_CHANGE` on selected registers → SQLite |
 
 ### config example
 
@@ -108,40 +108,40 @@ config.json
 "modbus_format": "TCP", "ip": "192.168.1.10", "port": 502
 ```
 
-> Inverter with `TCP` is **ignored**; UPS supports TCP.
+> **Inverter: RTU only.** There is no TCP transport path in `inverter_module.c`; a TCP entry is not rejected at load time but will fail at runtime (empty serial `path`, reconnect loop). **UPS** supports RTU and TCP.
+
+### config fields
+
+| Field | Used by daemon | Notes |
+|-------|----------------|-------|
+| `name`, `enabled`, `modbus_format`, `modbus_uid` | yes | |
+| `path`, `baud_rate` | yes (RTU) | Required for RTU; not validated at load time |
+| `ip`, `port` | yes (TCP, UPS only) | Required for TCP; not validated at load time |
+| `modbus_role`, `gpio` | parsed only | Stored in config; no runtime effect today |
+| `rtu_poll_interval_ms` | no | Fixed at 200 ms in `config_loader.c` |
+
+`enabled: false` entries are **skipped when config is loaded** — they are not kept in `global_config`. Toggling a unit requires editing `config.json` and restarting the daemon.
 
 ---
 
-## 🧠 Design
+## Design
 
-### config vs table
+### config vs register map
 
 | Task | Where |
 |------|-------|
-| Rewire (UID / serial / baud / enabled) | `config/config.json` |
-| **Add a unit** (same or new model) | new **pool block** + `devices/<dev>/*_map.c` profile + `config.json` |
+| Rewire (UID / serial / baud) | `config/config.json` + restart |
+| Enable / disable a unit | `config/config.json` + restart (`enabled: false` omitted at load) |
+| Change register layout or CMOS keys | `devices/<dev>/*_map.c` (pool_address, description) |
 
-```bash
-# ❌ config only, same pool → register_profile collision at startup
-# ✅ 2nd same-model unit = new model: assign new pool base, register new profile
-```
-
-### Default configuration
-
-Built-in **one profile / pool per device family**. Do not add a 2nd unit in config until a new pool is assigned:
+Current built-in profiles:
 
 | Device | profile | pool base |
 |--------|---------|-----------|
 | Inverter | `inverter1_profile` | `0xA000` |
 | UPS | `ups1_profile` | `0xA200` |
 
-```c
-// bridge commands target the first unit actually registered by start_*_modules()
-int inverter_get_primary_uid(uint8_t *out_uid);
-int ups_get_primary_uid(uint8_t *out_uid);
-```
-
-Adding a 2nd unit still needs a new profile + pool, CMOS per-unit routing (bridge currently sends commands to the first registered unit), and alarm ctx updates (still a single profile).
+HMI write/init commands are routed to the unit registered at startup (`inverter_get_primary_uid()` / `ups_get_primary_uid()`).
 
 ### Init flag (operator-triggered)
 
@@ -163,14 +163,18 @@ Connect success does **not** set init flag automatically.
 
 ---
 
-## 🔧 Maintenance
+## Maintenance
 
 | ⚠️ | Note |
 |----|------|
 | **CMOS key = map description** | renaming `description` in `*_map.c` changes the HMI subscription key |
 | **table sort order** | `device_address` must be ascending (binary search) |
-| **shared RS485** | same `path` → `bus_coord` mutex; Modbus UIDs must be unique |
+| **pool_address** | absolute values in `*_map.c` (e.g. `0xA000`, `0xA200`); not derived at runtime |
+| **shared RS485** | same `path` → `bus_coord` mutex (max **8** distinct paths); Modbus UIDs must be unique on a bus |
 | **Alarm paths** | hardcoded in `*_alarm.c`, not configurable |
+| **Dual alarm systems** | internal SQLite (`alarm_bridge`) vs external `config/alarm_user_config.ini` (CMOS topic watch for HMI); daemon does **not** load the INI |
+| **Comm loss marker** | sustained read failure sets all profile pool slots to `0xFFFF` |
+| **Startup** | module / alarm / CMOS init errors are logged; daemon keeps running |
 | **lib/** | changes require separate approval |
 
 ### Layout
@@ -178,20 +182,28 @@ Connect success does **not** set init flag automatically.
 ```
 src/           modules, bridge, alarm, main
 devices/       register maps (hardware contract)
-config/        config.json, alarm_user_config.ini (external HMI)
+config/        config.json (daemon); alarm_user_config.ini (external HMI alarm node only)
 lib/           modbus, cmos, device_map, alarm, sqlite
 ```
 
-### Add-a-unit checklist
+---
+
+## Multi-unit (not supported)
+
+**Current scope: one Inverter + one UPS.** That matches the default `config.json` and the built-in `inverter1_profile` / `ups1_profile` maps.
+
+Do not add a second entry of the same device family to config expecting it to work — the loader and module loops allow multiple entries, but profile binding, CMOS publish/command routing, and alarm reads are still single-profile.
+
+If multi-unit support is needed later:
 
 ```
-□ pick new pool base (must not overlap existing profiles)
+□ pick a new pool base (must not overlap existing profiles)
 □ devices/<name>/<name>_map.c   — copy table, update all pool_address values
 □ devices/<name>/<name>_map.h   — new profile
 □ config.json                   — new entry (uid / path / baud)
-□ *_module.c                    — bind profile
-□ *_cmos_bridge.c               — command routing (currently first registered unit)
-□ *_alarm.c                     — alarm ctx (if needed)
+□ *_module.c                    — bind profile per unit (remove hardcoded *1_profile)
+□ *_cmos_bridge.c               — publish table + command routing per unit
+□ *_alarm.c                     — point each ctx read_data at the correct profile
 ```
 
-2nd same-model unit vs new model: **same steps**. If register layout is identical, copy the table and change pool base only.
+Same-model 2nd unit vs new model: same steps. If the register layout is identical, copy the table and change the pool base only.

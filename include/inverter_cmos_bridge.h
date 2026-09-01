@@ -1,15 +1,6 @@
 /**
  * @file inverter_cmos_bridge.h
- * @brief CMOS subscriber / publisher bridge for Inverter.
- *
- * Parent process
- * ──────────────
- *  inverter_cmos_bridge_start() / stop() – CMOS subscriber thread for HMI
- *  write commands.  Called from inverter_module.c.
- *
- * Child process
- * ─────────────
- *  inverter_cmos_pub_run() – periodic status publisher.  Started from main.
+ * @brief Inverter CMOS bridge API.
  */
 
 #ifndef INVERTER_CMOS_BRIDGE_H
@@ -28,8 +19,6 @@ void inverter_cmos_bridge_stop(void);
 
 /**
  * @brief Publisher main loop for the Inverter child process.
- *
- * Does not return until SIGTERM or SIGINT.
  */
 void inverter_cmos_pub_run(void);
 

@@ -1,8 +1,6 @@
 /**
  * @file inverter_map.h
- * @brief Inverter1 profile and register address constants.
- *
- * Single hardware model; modbus_uid is set in config.json.
+ * @brief Inverter1 profile and register constants.
  */
 
 #ifndef INVERTER_MAP_H
@@ -23,12 +21,12 @@
 
 extern const device_map_profile_t inverter1_profile;
 
-extern const uint16_t int_frequency_cmd_souce_reg;
-extern const uint16_t int_run_cmd_souce_reg;
+extern const uint16_t int_frequency_cmd_source_reg;
+extern const uint16_t int_run_cmd_source_reg;
 extern const uint16_t int_frequency_upper_limit_reg;
 extern const uint16_t int_frequency_lower_limit_reg;
 extern const uint16_t int_acceleration_1_reg;
-extern const uint16_t int_Deceleration_1_reg;
+extern const uint16_t int_deceleration_1_reg;
 extern const uint16_t int_slave_id_reg;
 extern const uint16_t int_baud_rate_reg;
 extern const uint16_t int_modbust_error_handle_reg;
@@ -51,8 +49,8 @@ extern const uint16_t int_pid_feedback_value_reg;
 /* 0 = init pending, 1 = init complete (software pool slot). */
 extern const uint16_t int_inverter_init_flag_reg;
 
-extern const uint16_t dev_frequency_cmd_souce_reg;
-extern const uint16_t dev_run_cmd_souce_reg;
+extern const uint16_t dev_frequency_cmd_source_reg;
+extern const uint16_t dev_run_cmd_source_reg;
 
 extern const uint16_t dev_frequency_upper_limit_reg;
 extern const uint16_t dev_frequency_lower_limit_reg;
@@ -74,6 +72,11 @@ extern const uint16_t dev_operation_cmd_reg;
 extern const uint16_t dev_frequency_cmd_reg;
 extern const uint16_t dev_fault_control_cmd_reg;
 
+/**
+ * @brief Return true when queued writes to addr may be merged.
+ * @param device_address Device register address.
+ * @return true if merge is allowed.
+ */
 bool inverter_queue_merge_allowed(uint16_t device_address);
 
 #endif /* INVERTER_MAP_H */

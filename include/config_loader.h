@@ -1,6 +1,6 @@
 /**
  * @file config_loader.h
- * @brief JSON configuration for Inverter and UPS modules.
+ * @brief JSON configuration types and loader.
  */
 
 #ifndef CONFIG_LOADER_H
@@ -13,18 +13,18 @@
 #include "modbus_defines.h"
 
 #define CM_LFB_RS485_VERSION "0.0.1"
-#define MAX_INVERTER_COUNT            10
-#define MAX_UPS_COUNT                 10
+#define MAX_INVERTER_COUNT 10
+#define MAX_UPS_COUNT 10
 
 /** Receive buffer size for module I/O. */
 #ifndef MODBUS_MAX_BUFFER_SIZE
-#define MODBUS_MAX_BUFFER_SIZE        MODBUS_RTU_MAX_ADU_LENGTH
+#define MODBUS_MAX_BUFFER_SIZE MODBUS_RTU_MAX_ADU_LENGTH
 #endif
 
 typedef enum {
     CONNECTION_DISCONNECTED = 0,
-    CONNECTION_CONNECTED    = 1,
-    CONNECTION_UNKNOWN      = 99
+    CONNECTION_CONNECTED = 1,
+    CONNECTION_UNKNOWN = 99
 } connection_state_t;
 
 typedef enum {
@@ -34,44 +34,39 @@ typedef enum {
 
 /**
  * @brief Per-module runtime configuration.
- *
- * Register pool placement is handled entirely by the per-unit mapping tables
- * in inverter_map.c / ups_map.c (absolute pool_address values).  No
- * pool_base field is needed here.
- *
- * baud_rate (RTU) and ip/port (TCP) share storage via an anonymous union:
- * cfg->format selects which member is meaningful for a given unit.
+ * RTU uses path/baud_rate; TCP uses ip/port (union storage).
  */
 typedef struct {
-    char            name[64];
-    bool            enabled;
-    bool            is_server;
-    int             fd;
-    int             modbus_uid;
+    char name[64];
+    bool enabled;
+    bool is_server;
+    int fd;
+    int modbus_uid;
     modbus_format_t format;
-    char            path[256];
-    char            gpio[16];
+    char path[256];
+    char gpio[16];
     union {
-        struct { int  baud_rate; };
+        struct { int baud_rate; };
         struct { char ip[64]; int port; };
     };
-    char            modbus_role[16];
-    char            recv_buffer[MODBUS_MAX_BUFFER_SIZE];
-    size_t          recv_index;
-    connection_state_t  connection_state;
-    uint32_t            rtu_poll_interval_ms;
+    char modbus_role[16];
+    char recv_buffer[MODBUS_MAX_BUFFER_SIZE];
+    size_t recv_index;
+    connection_state_t connection_state;
+    uint32_t rtu_poll_interval_ms;
 } module_config_t;
 
 typedef struct {
     module_config_t inverter[MAX_INVERTER_COUNT];
-    int             inverter_count;
+    int inverter_count;
     module_config_t ups[MAX_UPS_COUNT];
-    int             ups_count;
+    int ups_count;
 } system_config_t;
 
 extern system_config_t global_config;
-extern char            global_config_path[256];
+extern char global_config_path[256];
 
+/** Module callback table used by polling threads. */
 typedef struct {
     int (*init_callback)(module_config_t *config);
     int (*start_callback)(const module_config_t *config);
@@ -81,6 +76,10 @@ typedef struct {
                         uint16_t *values, size_t count);
 } module_callbacks_t;
 
+/**
+ * @brief Load config.json into global_config.
+ * @param json_path Path to the JSON file.
+ */
 void load_json_config(const char *json_path);
 
 #endif /* CONFIG_LOADER_H */

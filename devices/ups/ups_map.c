@@ -1,16 +1,11 @@
 /**
  * @file ups_map.c
- * @brief UPS1 register map (pool base 0xA200).
- *
- * Row format: { device_address, pool_address, access, description }.
- * Rows must be sorted by device_address. description is the CMOS publish key.
- *
- * Default pool block for UPS1 (0xA200). Each additional unit needs its own pool base.
+ * @brief UPS1 register map (pool 0xA200); rows sorted by device_address.
  */
 
 #include "ups_map.h"
 
-#define ARRAY_SIZE(a)  (sizeof(a) / sizeof((a)[0]))
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 static const device_register_mapping_t ups1_mapping_table[] = {
     { 0x0000, 0xA200, ACCESS_RO, "ups_warning_information_1" },
@@ -66,15 +61,19 @@ static const device_register_mapping_t ups1_mapping_table[] = {
 };
 
 const device_map_profile_t ups1_profile = {
-    .name        = "UPS1",
-    .table       = ups1_mapping_table,
+    .name = "UPS1",
+    .table = ups1_mapping_table,
     .table_count = ARRAY_SIZE(ups1_mapping_table),
-    .read_chunk  = 50,
+    .read_chunk = 50,
 };
 
-/* Software flag in pool, not a hardware register. */
 const uint16_t int_ups_init_flag_reg = 0xA2F0;
 
+/**
+ * @brief Return true when queued writes to addr may be merged.
+ * @param device_address Device register address.
+ * @return true if merge is allowed.
+ */
 bool ups_queue_merge_allowed(uint16_t device_address)
 {
     (void)device_address;

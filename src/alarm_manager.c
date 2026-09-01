@@ -1,13 +1,6 @@
 /**
  * @file alarm_manager.c
- * @brief Shared Alarm Manager implementation – currently logs only.
- *
- * This is the single place to extend when alarm behaviour grows beyond
- * logging (CMOS publish, MQTT, DB write, escalation policy, rate limiting).
- * alarm_engine.c and device alarm modules never need to change as this grows.
- *
- * Multiple sinks (Inverter / UPS) may open separate SQLite databases;
- * each sink keeps its own directory and node tag.
+ * @brief Alarm event logging to SQLite.
  */
 
 #include <errno.h>
@@ -20,29 +13,28 @@
 #include "alarm_manager.h"
 #include "log.h"
 
-#define LOG_MAX_ROWS           10000
-#define ALARM_MANAGER_MAX_DBS  4
+#define LOG_MAX_ROWS 10000
+#define ALARM_MANAGER_MAX_DBS 4
 
 typedef struct {
     const char *path;
-    sqlite3    *db;
-    int         open_failed;
+    sqlite3 *db;
+    int open_failed;
 } alarm_db_slot_t;
 
 static alarm_db_slot_t g_dbs[ALARM_MANAGER_MAX_DBS];
-static size_t          g_db_count = 0u;
+static size_t g_db_count = 0u;
 
-/* ── Static prototypes ────────────────────────────────────────────────── */
-
-static void            ensure_log_dir(const char *log_dir);
+static void ensure_log_dir(const char *log_dir);
 static alarm_db_slot_t *find_or_open_db(const alarm_manager_sink_t *sink);
-static void            write_log(alarm_db_slot_t *slot,
-                                 const char      *node,
-                                 const char      *event,
-                                 const char      *detail);
+static void write_log(alarm_db_slot_t *slot,
+                      const char *node,
+                      const char *event,
+                      const char *detail);
 
-/* ── Public API ───────────────────────────────────────────────────────── */
-
+/**
+ * @brief Close all open alarm SQLite databases.
+ */
 void alarm_manager_close(void)
 {
     for (size_t i = 0u; i < g_db_count; i++) {
@@ -56,10 +48,18 @@ void alarm_manager_close(void)
     g_db_count = 0u;
 }
 
-void alarm_manager_handle_event(const alarm_entry_t       *entry,
-                                uint16_t                   value,
-                                alarm_event_t              event,
-                                void                      *userdata,
+/**
+ * @brief Handle one alarm trigger or clear event.
+ * @param entry Alarm table entry.
+ * @param value Register value at evaluation time.
+ * @param event ALARM_EVENT_TRIGGER or ALARM_EVENT_CLEAR.
+ * @param userdata Caller context.
+ * @param sink Log directory, DB path, and node tag.
+ */
+void alarm_manager_handle_event(const alarm_entry_t *entry,
+                                uint16_t value,
+                                alarm_event_t event,
+                                void *userdata,
                                 const alarm_manager_sink_t *sink)
 {
     if (!entry || !sink || !sink->log_path || !sink->log_node) {
@@ -99,8 +99,10 @@ void alarm_manager_handle_event(const alarm_entry_t       *entry,
     }
 }
 
-/* ── Static helpers ───────────────────────────────────────────────────── */
-
+/**
+ * @brief Create alarm log directory if missing.
+ * @param log_dir Directory path.
+ */
 static void ensure_log_dir(const char *log_dir)
 {
     if (!log_dir) {
@@ -113,6 +115,11 @@ static void ensure_log_dir(const char *log_dir)
     }
 }
 
+/**
+ * @brief Find or open the SQLite database for sink.
+ * @param sink Alarm log identity.
+ * @return Open slot pointer, or NULL on failure.
+ */
 static alarm_db_slot_t *find_or_open_db(const alarm_manager_sink_t *sink)
 {
     for (size_t i = 0u; i < g_db_count; i++) {
@@ -168,18 +175,25 @@ static alarm_db_slot_t *find_or_open_db(const alarm_manager_sink_t *sink)
     return slot;
 }
 
+/**
+ * @brief Insert or rotate one alarm log row.
+ * @param slot Open database slot.
+ * @param node Node tag.
+ * @param event Event name.
+ * @param detail Event detail text.
+ */
 static void write_log(alarm_db_slot_t *slot,
-                      const char      *node,
-                      const char      *event,
-                      const char      *detail)
+                      const char *node,
+                      const char *event,
+                      const char *detail)
 {
     if (!slot || !slot->db) {
         return;
     }
 
-    time_t    now = time(NULL);
+    time_t now = time(NULL);
     struct tm tm_buf;
-    char      ts[32];
+    char ts[32];
     strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", localtime_r(&now, &tm_buf));
 
     int count = 0;
@@ -205,8 +219,8 @@ static void write_log(alarm_db_slot_t *slot,
         return;
     }
 
-    sqlite3_bind_text(stmt, 1, ts,    -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, node,  -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 1, ts, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, node, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 3, event, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 4, detail, -1, SQLITE_STATIC);
 
