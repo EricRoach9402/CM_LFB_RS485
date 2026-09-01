@@ -70,4 +70,22 @@ int inverter_cmd_push(uint8_t uid, uint16_t addr,
                       const uint16_t *values, uint16_t count,
                       inverter_write_mode_t mode);
 
+/* ── Init sequence ────────────────────────────────────────────────────── */
+
+/**
+ * @brief Request the operator-initiated init sequence for one Inverter unit.
+ *
+ * Non-blocking: only marks the request.  The sequence itself runs on the
+ * unit's polling thread, which owns the register writes and raises the
+ * init-finished flag (see inverter_init_status.h).  Callers therefore never
+ * need to know which registers init touches or when it completes.
+ *
+ * May be called repeatedly; a request pending when another arrives is
+ * simply absorbed into the next run.
+ *
+ * @param uid  modbus_uid of the target Inverter unit.
+ * @return 0 if the request was accepted, -1 if the unit is not found.
+ */
+int inverter_init_request(uint8_t uid);
+
 #endif /* INVERTER_MODULE_H */

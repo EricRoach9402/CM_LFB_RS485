@@ -1,47 +1,9 @@
 /**
  * @file ups_module.c
- * @brief UPS polling module – Modbus TCP or RTU client implementation.
+ * @brief UPS Modbus polling – RTU or TCP per config (one thread per unit).
  *
- * Transport selection
- * ───────────────────
- *  Each UPS unit's transport (TCP socket or RTU serial port) is selected at
- *  runtime by cfg->format (config.json "modbus_format": "TCP" | "RTU").
- *  Switching a unit between TCP and RTU is purely a configuration change –
- *  no source change is required.  All callback and log naming below is kept
- *  transport-neutral for this reason.
- *
- * Callback design
- * ───────────────
- *  ups_init_callback    – connect the unit's transport (TCP or RTU).
- *  ups_process_callback – drain write queue, then segment-read all
- *                         registers → write to pool.
- *  ups_error_callback   – disconnect and schedule reconnect.
- *  ups_msg_callback     – execute FC06 / FC16 write on a UPS unit.
- *
- * CMOS bridge integration
- * ───────────────────────
- *  A dedicated CMOS subscriber thread (ups_cmos_bridge.c) receives write /
- *  read commands and enqueues writes via ups_cmd_push().
- *  process_callback drains the queue before each FC03 scan.
- *
- * Thread model
- * ────────────
- *  One pthread per enabled UPS unit.  Each thread calls:
- *    init_callback  → success  → loop: process_callback
- *                   → failure  → retry after UPS_RECONNECT_DELAY_MS
- *
- * Profile selection
- * ─────────────────
- *  Exactly one UPS hardware model is currently implemented (ups1_profile
- *  in devices/ups/ups_map.c), so every enabled unit uses it directly – no
- *  lookup/selection mechanism exists yet.  modbus_uid is purely a wiring
- *  detail and never selects a profile.  If a second model is ever needed,
- *  a real selection mechanism should be introduced here at that time.
- *
- * Adding a new UPS unit
- * ─────────────────────
- *  1. Add table + profile in devices/ups/ups_map.c.
- *  2. Declare the profile extern in devices/ups/ups_map.h.
+ * Uses ups1_profile only. Init sequence and int_ups_init_flag_reg are owned
+ * here; the CMOS bridge calls ups_init_request().
  */
 
 #include <stdlib.h>
@@ -50,6 +12,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 #include "ups_module.h"
@@ -100,10 +63,14 @@ typedef struct {
     volatile sig_atomic_t       running;
     int                         comm_fail_count;
     ups_cmd_queue_t             cmd_queue;
+    atomic_bool                 init_requested;  /**< set by any caller, consumed by the polling thread */
 } ups_unit_t;
 
 static ups_unit_t  ups_units[MAX_UPS_COUNT];
 static int         ups_unit_count = 0;
+
+static int read_profile_to_pool(ups_unit_t *unit, bool track_comm_fail);
+static void run_init_sequence(ups_unit_t *unit);
 
 /* ── Queue helpers (static) ───────────────────────────────────────────── */
 
@@ -120,17 +87,37 @@ static void queue_destroy(ups_cmd_queue_t *q)
 
 /**
  * @brief Push one write command onto the tail of the queue.
+ *
+ * Merge-allowed addresses (see ups_queue_merge_allowed) update an
+ * existing pending single-register entry instead of consuming another slot.
+ *
  * @return 0 on success, -1 if the queue is full or count is out of range.
  */
 static int queue_push(ups_cmd_queue_t *q, uint16_t addr,
                       const uint16_t *values, uint16_t count,
                       ups_write_mode_t mode)
 {
-    if (count == 0 || count > MODBUS_MAX_WRITE_REGISTERS) {
+    if (!values || count == 0u || count > MODBUS_MAX_WRITE_REGISTERS) {
         return -1;
     }
 
     pthread_mutex_lock(&q->lock);
+
+    if (count == 1u && ups_queue_merge_allowed(addr)) {
+        unsigned int idx = q->head;
+        for (unsigned int i = 0u; i < q->count; i++) {
+            ups_write_cmd_t *entry = &q->entries[idx];
+
+            if (entry->addr == addr && entry->count == 1u) {
+                entry->mode = mode;
+                entry->values[0] = values[0];
+                pthread_mutex_unlock(&q->lock);
+                return 0;
+            }
+
+            idx = (idx + 1u) % UPS_CMD_QUEUE_CAPACITY;
+        }
+    }
 
     if (q->count >= UPS_CMD_QUEUE_CAPACITY) {
         pthread_mutex_unlock(&q->lock);
@@ -140,7 +127,7 @@ static int queue_push(ups_cmd_queue_t *q, uint16_t addr,
     ups_write_cmd_t *entry = &q->entries[q->tail];
     entry->addr  = addr;
     entry->count = count;
-    entry->mode = mode;
+    entry->mode  = mode;
     memcpy(entry->values, values, count * sizeof(uint16_t));
 
     q->tail  = (q->tail + 1u) % UPS_CMD_QUEUE_CAPACITY;
@@ -486,6 +473,8 @@ int ups_init_callback(module_config_t *cfg)
 /**
  * @brief process_callback – drain write queue, then read all mapped registers.
  *
+ * Phase 0: run a pending init request (full register refresh).
+ *
  * Phase 1: drain the per-unit write queue under one bus_coord hold so a
  *          co-bus module cannot interleave until post-write settle completes.
  *          A write failure is logged but does not abort the read phase.
@@ -507,6 +496,11 @@ int ups_process_callback(module_config_t *cfg)
     ups_unit_t *unit = ups_unit_from_config(cfg);
     if (!unit) {
         return -1;
+    }
+
+    /* ── Phase 0: run a pending init request ────────────────────────── */
+    if (atomic_exchange(&unit->init_requested, false)) {
+        run_init_sequence(unit);
     }
 
     /* ── Phase 1: drain the write command queue ─────────────────────── */
@@ -532,6 +526,27 @@ int ups_process_callback(module_config_t *cfg)
     }
 
     /* ── Phase 2: segmented FC03 read scan ──────────────────────────── */
+    if (read_profile_to_pool(unit, true) != 0) {
+        return -1;
+    }
+
+    usleep((useconds_t)(cfg->rtu_poll_interval_ms * 1000u));
+    return 0;
+}
+
+/**
+ * @brief Read all mapped registers into the pool.
+ *
+ * @param unit             Target UPS unit.
+ * @param track_comm_fail  When true, increment comm_fail_count on failure and
+ *                         blank the unit's pool on threshold; when false (init
+ *                         path), a single failure is returned without affecting
+ *                         the connection state.
+ * @return 0 on success, -1 on read failure.
+ */
+static int read_profile_to_pool(ups_unit_t *unit, bool track_comm_fail)
+{
+    module_config_t *cfg = unit->cfg;
     const device_map_profile_t *profile = unit->profile;
 
     if (profile->table_count == 0) {
@@ -561,22 +576,27 @@ int ups_process_callback(module_config_t *cfg)
         int result = unit_read_holding_registers(unit, start, count, buf);
 
         if (result != 0) {
+            if (!track_comm_fail) {
+                LOG_WARNING("[%s] %s init read 0x%04X len %u failed (err %d).",
+                            ups_log_tag(unit), cfg->name, start, count, result);
+                return -1;
+            }
+
             unit->comm_fail_count++;
             LOG_WARNING("[%s] %s read 0x%04X len %u failed (err %d, fail %d/%d)",
                         ups_log_tag(unit), cfg->name, start, count, result,
                         unit->comm_fail_count, UPS_COMM_FAIL_THRESHOLD);
 
             if (unit->comm_fail_count >= UPS_COMM_FAIL_THRESHOLD) {
-                /* Only blank this unit's own mapped registers – never a
-                 * hardcoded address range, which could span into another
-                 * device family's pool region. */
                 for (size_t k = 0; k < profile->table_count; k++) {
                     pool_write_register(profile->table[k].pool_address, 0xFFFF);
                 }
                 return -1;
             }
         } else {
-            unit->comm_fail_count = 0;
+            if (track_comm_fail) {
+                unit->comm_fail_count = 0;
+            }
             device_map_read_to_pool(profile, buf, start, (int)count);
         }
 
@@ -586,8 +606,30 @@ int ups_process_callback(module_config_t *cfg)
         seg_len   = 1;
     }
 
-    usleep((useconds_t)(cfg->rtu_poll_interval_ms * 1000u));
     return 0;
+}
+
+/**
+ * @brief Run the operator-initiated init sequence and record the result.
+ *
+ * Refreshes all mapped registers from the device and owns int_ups_init_flag_reg
+ * end to end: cleared on entry so a repeated request starts from 0, set to 1
+ * only once every segment read succeeds.  The CMOS bridge just publishes that
+ * slot; it never needs to know what init does.
+ */
+static void run_init_sequence(ups_unit_t *unit)
+{
+    pool_write_register(int_ups_init_flag_reg, 0);
+
+    if (read_profile_to_pool(unit, false) != 0) {
+        LOG_ERROR("[%s] %s: init sequence failed; init flag stays 0.",
+                  ups_log_tag(unit), unit->cfg->name);
+        return;
+    }
+
+    pool_write_register(int_ups_init_flag_reg, 1);
+    LOG_INFO("[%s] %s: init sequence complete.",
+             ups_log_tag(unit), unit->cfg->name);
 }
 
 /**
@@ -741,6 +783,7 @@ int start_ups_modules(module_config_t ups[], int ups_count)
         memset(&unit->rtu_ctx, 0, sizeof(unit->rtu_ctx));
         unit->rtu_ctx.fd = -1;
         queue_init(&unit->cmd_queue);
+        atomic_init(&unit->init_requested, false);
 
         unit->callbacks.init_callback    = ups_init_callback;
         unit->callbacks.process_callback = ups_process_callback;
@@ -821,4 +864,25 @@ int ups_cmd_push(uint8_t uid, uint16_t addr,
     }
 
     return queue_push(&unit->cmd_queue, addr, values, count, mode);
+}
+
+/**
+ * @brief Mark the init sequence as requested for one unit.
+ *
+ * Non-blocking; the sequence runs on the unit's polling thread.
+ *
+ * @return 0 on success, -1 if the unit is not found.
+ */
+int ups_init_request(uint8_t uid)
+{
+    ups_unit_t *unit = ups_unit_from_uid(uid);
+    if (!unit) {
+        LOG_WARNING("[UPS] ups_init_request: uid=%u not found.", uid);
+        return -1;
+    }
+
+    atomic_store(&unit->init_requested, true);
+
+    LOG_INFO("[UPS] init sequence requested for uid=%u.", uid);
+    return 0;
 }

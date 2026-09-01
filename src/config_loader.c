@@ -1,11 +1,6 @@
 /**
  * @file config_loader.c
- * @brief Implementation file for configuration loading in loop_charger_inverter.
- *
- * Parses the JSON configuration file and populates the global system
- * configuration structure.  Only fields used by the runtime are loaded;
- * register pool placement is handled entirely by the per-unit mapping
- * tables in inverter_map.c.
+ * @brief Load config.json into global_config.
  */
 
 #include <stdio.h>
@@ -118,7 +113,6 @@ static void load_module_config(json_object *json_obj, module_config_t *config)
         }
     }
 
-    config->disconnect_timeout   = 0.0;
     config->rtu_poll_interval_ms = 200u;
 }
 

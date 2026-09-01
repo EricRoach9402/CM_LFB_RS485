@@ -69,4 +69,22 @@ int ups_cmd_push(uint8_t uid, uint16_t addr,
                  const uint16_t *values, uint16_t count,
                  ups_write_mode_t mode);
 
+/* ── Init sequence ────────────────────────────────────────────────────── */
+
+/**
+ * @brief Request the operator-initiated init sequence for one UPS unit.
+ *
+ * Non-blocking: only marks the request.  The sequence itself runs on the
+ * unit's polling thread, which refreshes all mapped registers and raises
+ * the init-finished flag (int_ups_init_flag_reg).  Callers therefore never
+ * need to know when it completes.
+ *
+ * May be called repeatedly; a request pending when another arrives is
+ * simply absorbed into the next run.
+ *
+ * @param uid  modbus_uid of the target UPS unit.
+ * @return 0 if the request was accepted, -1 if the unit is not found.
+ */
+int ups_init_request(uint8_t uid);
+
 #endif /* UPS_MODULE_H */

@@ -1,19 +1,9 @@
 /**
  * @file inverter_cmos_bridge.c
- * @brief CMOS ↔ Inverter Modbus bridge.
+ * @brief CMOS bridge for Inverter (subscriber in parent, publisher in child).
  *
- * Parent process (inverter_cmos_bridge_start):
- *  - cmos_sub_thread – blocking CMOS subscriber for HMI write commands.
- *    Each on_xxx_cmd handler owns its register address and delegates to
- *    on_write().
- *
- * Child process (inverter_cmos_pub_run, started from main):
- *  - Periodic publisher on BRIDGE_PUB_TOPIC; reads internal_pool[] and
- *    shared_connection_state_get() for alive/disconnect.
- *
- * cmos_sub_spin_ctx() cannot be stopped gracefully (it loops on while(1)).
- * pthread_cancel() is used; epoll_wait() is a POSIX cancellation point so the
- * thread exits cleanly, and the cleanup handler calls cmos_sub_destroy().
+ * Parent must not call cmos_publish(); write to internal_pool[] instead.
+ * Subscriber thread stops via pthread_cancel() (epoll_wait cancellation point).
  */
 
 #include "inverter_cmos_bridge.h"
@@ -32,39 +22,19 @@
 #include <unistd.h>
 #include <stdint.h>
 
-/* ── CMOS connection constants ────────────────────────────────────────── */
 #define BRIDGE_MASTER_IP        "127.0.0.1"
 #define BRIDGE_MASTER_PORT      10000
-#define BRIDGE_PUB_PORT         13000           /* listen port for read responses  */
-#define BRIDGE_NODE_NAME        "inverter_node_pub"  /* node name for master registration */
-#define BRIDGE_SUB_TOPIC        "control_output"  /* topic for write/read requests   */
-#define BRIDGE_PUB_TOPIC        "inverter"       /* topic for read responses        */
-#define BRIDGE_PUB_POLL_US      500000u           /* 500 ms poll interval             */
+#define BRIDGE_PUB_PORT         13000
+#define BRIDGE_NODE_NAME        "inverter_node_pub"
+#define BRIDGE_SUB_TOPIC        "control_output"
+#define BRIDGE_PUB_TOPIC        "inverter"
+#define BRIDGE_PUB_POLL_US      500000u
 
-/*
- * This project currently only wires up Inverter#1, so this bridge always
- * targets the first configured Inverter unit.  The uid itself is never
- * hardcoded – it is read straight from config.json at call time, so
- * re-wiring Inverter#1 to a different modbus_uid needs no source change.
- */
+/* First enabled Inverter in config (single-unit deployment). */
 #define INVERTER_BRIDGE_DEFAULT_UID  ((uint8_t)global_config.inverter[0].modbus_uid)
-
-/* Device register map 2000H bit 0 : Stop Bit, bit 1 : Run Bit*/
-#define INVERTER_STOP_BIT (1 << 0)
-#define INVERTER_RUN_BIT (1 << 1)
-#define INVERTER_ENABLE_ACCELERATION_BIT (1 << 12)
-
-/* Device register map 2002H bit 0 : EF, bit 1: reset, bit 2: B.B, bit 5 : Fire Mode Bit*/
-#define INVERTER_EF_BIT (1 << 0)
-#define INVERTER_RESET_BIT (1 << 1)
-#define INVERTER_BB_BIT (1 << 2)
-#define INVERTER_FIRE_MODE_BIT (1 << 5)
-
-/* ── Static Variables ───────────────────────────────────────────────────── */
 static pthread_t             g_sub_thread;
 static volatile sig_atomic_t g_pub_running = 0;
 
-/* ── Static Function Prototypes ─────────────────────────────────────────── */
 static int on_write(uint8_t uid, uint16_t addr, uint16_t val);
 static void on_bypass_cmd(const char *topic, const char *value);
 static void on_init_inverter_cmd(const char *topic, const char *value);
@@ -82,8 +52,6 @@ static void pub_signal_handler(int sig);
 static void publish_frequency_cmd_duty(const module_config_t *cfg);
 static void publish_frequency_out_duty(const module_config_t *cfg);
 static void publish_fault_warning_code(const module_config_t *cfg);
-
-/* ── Public API ───────────────────────────────────────────────────────── */
 
 int inverter_cmos_bridge_start(void)
 {
@@ -104,12 +72,6 @@ void inverter_cmos_bridge_stop(void)
     LOG_INFO("[CMOS Bridge] subscriber stopped.");
 }
 
-/**
- * @brief CMOS publisher main loop for the Inverter child process.
- *
- * Registers with the CMOS master, accepts subscribers, and publishes pool
- * values on BRIDGE_PUB_POLL_US intervals.  Exits on SIGTERM or SIGINT.
- */
 void inverter_cmos_pub_run(void)
 {
     struct sigaction sa = {
@@ -148,18 +110,6 @@ void inverter_cmos_pub_run(void)
     LOG_INFO("[CMOS Bridge] publisher process exiting.");
 }
 
-
-/**
- * @brief Validate and enqueue a single-register write.
- *
- * Checks that addr is mapped in inverter1_profile and not ACCESS_RO, then
- * pushes the write command via inverter_cmd_push().
- *
- * Every on_xxx_cmd handler should call this instead of repeating the
- * validate/enqueue sequence itself.  Must stay non-blocking.
- *
- * @return 0 on success, -1 on validation failure or queue-full.
- */
 static int on_write(uint8_t uid, uint16_t addr, uint16_t val)
 {
     const device_register_mapping_t *entry =
@@ -187,7 +137,6 @@ static int on_write(uint8_t uid, uint16_t addr, uint16_t val)
     return 0;
 }
 
-/* ── CMOS callbacks ───────────────────────────────────────────────────── */
 static void on_bypass_cmd(const char *topic, const char *value)
 {
     LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='bypass' value='%s'",
@@ -196,10 +145,10 @@ static void on_bypass_cmd(const char *topic, const char *value)
     uint16_t bypass_bool_val = (uint16_t)strtoul(value, NULL, 0);
 
     if ( bypass_bool_val == 1 ) {
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_fault_constrol_cmd_reg, INVERTER_FIRE_MODE_BIT);
+        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_fault_control_cmd_reg, INVERTER_FIRE_MODE_BIT);
         LOG_INFO("[CMOS Bridge] Received enable bypass command : %u" , bypass_bool_val);
     } else {
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_fault_constrol_cmd_reg, INVERTER_EF_BIT);
+        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_fault_control_cmd_reg, INVERTER_EF_BIT);
         LOG_INFO("[CMOS Bridge] Received cancel bypass command : %u" , bypass_bool_val);
     }
 }
@@ -210,12 +159,13 @@ static void on_init_inverter_cmd(const char *topic, const char *value)
 
     uint16_t init_bool_val = (uint16_t)strtoul(value, NULL, 0);
 
-    if ( init_bool_val == 1 ) {
-        on_write(INVERTER_BRIDGE_DEFAULT_UID, dev_frequency_cmd_reg, 0);
-        LOG_INFO("[CMOS Bridge] Received init command : %u" , init_bool_val);
-    } else {
-        LOG_WARNING("[COMIS Bridge] Received faulty init command : %u" , init_bool_val);
+    if ( init_bool_val != 1 ) {
+        LOG_WARNING("[CMOS Bridge] Received faulty init command : %u" , init_bool_val);
+        return;
     }
+
+    inverter_init_request(INVERTER_BRIDGE_DEFAULT_UID);
+    LOG_INFO("[CMOS Bridge] Received init command : %u" , init_bool_val);
 }
 
 static void on_main_pump_duty_cmd(const char *topic, const char *value)
@@ -277,18 +227,13 @@ static void on_fault_control_cmd(const char *topic, const char *value)
     LOG_VERBOSE("[Inverter CMOS] SUB topic='%s' key='inv_fault_Control_commands' value='%s'",
                 topic ? topic : NULL, value ? value : "");
 
-    uint16_t addr = int_fault_control_cmd_reg;
+    uint16_t addr = dev_fault_control_cmd_reg;
     uint16_t val  = (uint16_t)strtoul(value, NULL, 0);
 
     on_write(INVERTER_BRIDGE_DEFAULT_UID, addr, val);
     LOG_INFO("[CMOS Bridge] Operation commands received register: '%4x' value:'%s'",addr, value);
 }
 
-/* ── Thread cleanup handler ───────────────────────────────────────────── */
-
-/**
- * @brief pthread cleanup handler – destroys the subscriber context on cancel.
- */
 static void cleanup_sub_ctx(void *arg)
 {
     cmos_sub_ctx_t *ctx = (cmos_sub_ctx_t *)arg;
@@ -296,17 +241,6 @@ static void cleanup_sub_ctx(void *arg)
     LOG_INFO("[CMOS Bridge] subscriber context destroyed.");
 }
 
-/* ── Thread functions ─────────────────────────────────────────────────── */
-
-/**
- * @brief CMOS subscriber thread.
- *
- * Subscribes to BRIDGE_SUB_TOPIC once per HMI command (type="command",
- * key=<cmd name>), each routed to its own on_xxx_cmd handler, then enters
- * cmos_sub_spin_ctx() which blocks indefinitely.  The thread is stopped via
- * pthread_cancel(); epoll_wait() inside spin_ctx is a cancellation point so
- * the thread exits cleanly.
- */
 static void *cmos_sub_thread(void *arg)
 {
     (void)arg;
@@ -321,33 +255,22 @@ static void *cmos_sub_thread(void *arg)
 
     pthread_cleanup_push(cleanup_sub_ctx, ctx);
 
-    cmos_sub_add(ctx, BRIDGE_SUB_TOPIC, NULL, "command", "inv_operation_commands", on_operation_cmd);
-    cmos_sub_add(ctx, BRIDGE_SUB_TOPIC, NULL, "command", "inv_frequency_write_commands", on_frequency_write_cmd);
-    cmos_sub_add(ctx, BRIDGE_SUB_TOPIC, NULL, "command", "inv_fault_Control_commands", on_fault_control_cmd);
-    cmos_sub_add(ctx, BRIDGE_SUB_TOPIC, NULL, "ctrl", "main_pump", on_main_pump_duty_cmd);
-    cmos_sub_add(ctx, BRIDGE_SUB_TOPIC, NULL, "ctrl", "init", on_init_inverter_cmd);
-    cmos_sub_add(ctx, BRIDGE_SUB_TOPIC, NULL, "ctrl", "bypass", on_bypass_cmd);
+    cmos_sub_add(ctx, "control_output", NULL, "command", "inv_operation_commands", on_operation_cmd);
+    cmos_sub_add(ctx, "control_output", NULL, "command", "inv_frequency_write_commands", on_frequency_write_cmd);
+    cmos_sub_add(ctx, "control_output", NULL, "command", "inv_fault_Control_commands", on_fault_control_cmd);
+    cmos_sub_add(ctx, "control_output", NULL, "ctrl",    "main_pump", on_main_pump_duty_cmd);
+    cmos_sub_add(ctx, "event",          NULL, "initial", "request_init_status", on_init_inverter_cmd);
+    cmos_sub_add(ctx, "control_output", NULL, "ctrl",    "bypass", on_bypass_cmd);
 
     LOG_INFO("[CMOS Bridge] subscriber thread ready, "
              "topic='%s' (write + read).", BRIDGE_SUB_TOPIC);
 
-    cmos_sub_spin_ctx(ctx);  /* blocks – exited only by pthread_cancel() */
+    cmos_sub_spin_ctx(ctx);
 
     pthread_cleanup_pop(1);
     return NULL;
 }
 
-/**
- * @brief Read one pool register and publish its value to BRIDGE_PUB_TOPIC.
- *
- * Converts the cached uint16_t pool value to a decimal string and forwards
- * it to cmos_publish().  Called from inverter_cmos_pub_run().
- *
- * @param cfg   Module configuration (used for connection-state string).
- * @param type  CMOS message type field.
- * @param key   CMOS message key field (e.g. register address string).
- * @param pool_address  Absolute index into internal_pool[].
- */
 static void publish_pool_register(const module_config_t *cfg,
                                   const char *type,
                                   const char *key,
@@ -379,20 +302,7 @@ static void publish_pool_register(const module_config_t *cfg,
     cmos_publish(state, type, key, val_str);
 }
 
-/**
- * @brief Publish every mapped register of one unit's profile to CMOS.
- *
- * Drives the periodic status push directly from the unit's
- * device_map_profile_t table (see devices/ups/ups_map.c) instead of a
- * hand-written per-register list: for every row, table[i].description is
- * used as the CMOS key and table[i].pool_address selects the value.
- *
- * @param cfg  Module configuration for the unit being published (only
- *             used for its name and alive/disconnect connection_state;
- *             the register set is inverter1_profile, the only Inverter
- *             hardware model currently implemented).
- */
- static void publish_all_pool_register(const module_config_t *cfg)
+static void publish_all_pool_register(const module_config_t *cfg)
 {
     if (!cfg || !cfg->enabled) {
         return;
@@ -405,14 +315,6 @@ static void publish_pool_register(const module_config_t *cfg,
     }
 }
 
-/**
- * @brief Publish the additional items to CMOS.
- *
- * @param cfg  Module configuration for the unit being published (only
- *             used for its name and alive/disconnect connection_state;
- *             the register set is inverter1_profile, the only Inverter
- *             hardware model currently implemented).
- */
 static void publish_additional_item(const module_config_t *cfg)
 {
     if (!cfg || !cfg->enabled) {
@@ -422,23 +324,15 @@ static void publish_additional_item(const module_config_t *cfg)
     publish_frequency_cmd_duty(cfg);
     publish_frequency_out_duty(cfg);
     publish_fault_warning_code(cfg);
+    publish_pool_register(cfg, NULL, "initial_flag", int_inverter_init_flag_reg);
 }
 
-/**
- * @brief SIGTERM/SIGINT handler for the publisher child process.
- */
 static void pub_signal_handler(int sig)
 {
     (void)sig;
     g_pub_running = 0;
 }
 
-/**
- * @brief Convert the duty to frequency.
- *
- * @param duty  Duty value.
- * @return Frequency value.
- */
 static uint16_t duty_convert_frequency(uint16_t duty)
 {
     uint16_t upper = 0;
@@ -486,14 +380,6 @@ static uint16_t frequency_convert_duty(uint16_t frequency)
     return (uint16_t)((delta * 100u + range / 2u) / range);
 }
 
-/**
- * @brief Publish the frequency command duty to CMOS.
- *
- * @param cfg  Module configuration for the unit being published (only
- *             used for its name and alive/disconnect connection_state;
- *             the register set is inverter1_profile, the only Inverter
- *             hardware model currently implemented).
- */
 static void publish_frequency_cmd_duty(const module_config_t *cfg)
 {
     uint16_t frequency_cmd = 0;
@@ -517,14 +403,6 @@ static void publish_frequency_cmd_duty(const module_config_t *cfg)
                 val_str);
 }
 
-/**
- * @brief Publish the frequency output duty to CMOS.
- *
- * @param cfg  Module configuration for the unit being published (only
- *             used for its name and alive/disconnect connection_state;
- *             the register set is inverter1_profile, the only Inverter
- *             hardware model currently implemented).
- */
 static void publish_frequency_out_duty(const module_config_t *cfg)
 {
     uint16_t frequency_out = 0;
@@ -583,3 +461,4 @@ static void publish_fault_warning_code(const module_config_t *cfg)
                 "warning_code",
                 warning_val_str);
 }
+

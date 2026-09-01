@@ -1,6 +1,6 @@
 /**
  * @file config_loader.h
- * @brief JSON configuration loading for loop_charger_inverter (Inverter + UPS).
+ * @brief JSON configuration for Inverter and UPS modules.
  */
 
 #ifndef CONFIG_LOADER_H
@@ -59,7 +59,6 @@ typedef struct {
     char            recv_buffer[MODBUS_MAX_BUFFER_SIZE];
     size_t          recv_index;
     connection_state_t  connection_state;
-    double              disconnect_timeout;
     uint32_t            rtu_poll_interval_ms;
 } module_config_t;
 

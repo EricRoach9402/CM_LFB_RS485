@@ -12,5 +12,4 @@ CompileFlags:
     - -I/home/eric/CM_LFB_RS485/lib/device_map
     - -I/home/eric/CM_LFB_RS485/lib/log
     - -I/home/eric/CM_LFB_RS485/lib/sqlite3
-    - -I/home/eric/CM_LFB_RS485/tests/unity
 

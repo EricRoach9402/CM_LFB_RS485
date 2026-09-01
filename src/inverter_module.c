@@ -1,40 +1,9 @@
 /**
  * @file inverter_module.c
- * @brief Inverter polling module – Modbus RTU client implementation.
+ * @brief Inverter Modbus RTU polling (one thread per enabled unit).
  *
- * Callback design
- * ───────────────
- *  inverter_rtu_init_callback    – open and configure the serial port.
- *  inverter_rtu_process_callback – drain write queue, then segment-read all
- *                                  registers → write to pool.
- *  inverter_rtu_error_callback   – close serial port and schedule reconnect.
- *  inverter_msg_callback         – execute FC06 / FC16 write on an Inverter unit.
- *
- * CMOS bridge integration
- * ───────────────────────
- *  A dedicated CMOS subscriber thread (inverter_cmos_bridge.c) receives write /
- *  read commands and enqueues writes via inverter_cmd_push().
- *  process_callback drains the queue before each FC03 scan.
- *
- * Thread model
- * ────────────
- *  One pthread per enabled Inverter unit.  Each thread calls:
- *    init_callback  → success  → loop: process_callback
- *                   → failure  → retry after INVERTER_RECONNECT_DELAY_MS
- *
- * Profile selection
- * ─────────────────
- *  Exactly one Inverter hardware model is currently implemented
- *  (inverter1_profile in devices/inverter/inverter_map.c), so every
- *  enabled unit uses it directly – no lookup/selection mechanism exists
- *  yet.  modbus_uid is purely a wiring detail and never selects a
- *  profile.  If a second model is ever needed, a real selection
- *  mechanism should be introduced here at that time.
- *
- * Adding a new Inverter unit
- * ──────────────────────────
- *  1. Add table + profile in devices/inverter/inverter_map.c.
- *  2. Declare the profile extern in devices/inverter/inverter_map.h.
+ * Uses inverter1_profile only. Init sequence and int_inverter_init_flag_reg
+ * are owned here; the CMOS bridge calls inverter_init_request().
  */
 
 #include <stdlib.h>
@@ -43,6 +12,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 #include "inverter_module.h"
@@ -91,6 +61,7 @@ typedef struct {
     volatile sig_atomic_t       running;
     int                         comm_fail_count;
     inverter_cmd_queue_t        cmd_queue;
+    atomic_bool                 init_requested;  /**< set by any caller, consumed by the polling thread */
 } inverter_unit_t;
 
 /* ── Static Function Prototypes ─────────────────────────────────────────── */
@@ -102,11 +73,13 @@ static void queue_init(inverter_cmd_queue_t *q);
 static void queue_destroy(inverter_cmd_queue_t *q);
 static int queue_push(inverter_cmd_queue_t *q, uint16_t addr, const uint16_t *values, uint16_t count, inverter_write_mode_t mode);
 static int queue_pop(inverter_cmd_queue_t *q, inverter_write_cmd_t *out);
+static void run_init_sequence(inverter_unit_t *unit);
 static inverter_unit_t *inverter_unit_from_config(const module_config_t *cfg);
 static inverter_unit_t *inverter_unit_from_uid(uint8_t uid);
 static void interruptible_sleep_ms(const inverter_unit_t *unit, uint32_t duration_ms);
 static int write_registers_locked(inverter_unit_t *unit, uint16_t addr, const uint16_t *values, uint16_t count, inverter_write_mode_t mode);
 static int write_registers_to_device(inverter_unit_t *unit, uint16_t addr, const uint16_t *values, uint16_t count, inverter_write_mode_t mode);
+static bool inverter_baud_convert(uint32_t host_baud, uint16_t *out_reg);
 static void init_inverter_reg(inverter_unit_t *unit);
 static void *inverter_rtu_thread(void *arg);
 
@@ -157,6 +130,7 @@ int start_inverter_modules(module_config_t inverters[], int inverter_count)
         memset(&unit->rtu_ctx, 0, sizeof(unit->rtu_ctx));
         unit->rtu_ctx.fd = -1;
         queue_init(&unit->cmd_queue);
+        atomic_init(&unit->init_requested, false);
 
         unit->callbacks.init_callback    = inverter_rtu_init_callback;
         unit->callbacks.process_callback = inverter_rtu_process_callback;
@@ -184,6 +158,7 @@ int start_inverter_modules(module_config_t inverters[], int inverter_count)
 
     if (inverter_cmos_bridge_start() != 0) {
         LOG_ERROR("[Inverter] CMOS bridge failed to start.");
+        status = -1;
     }
 
     return status;
@@ -237,6 +212,27 @@ int inverter_cmd_push(uint8_t uid, uint16_t addr,
     }
 
     return queue_push(&unit->cmd_queue, addr, values, count, mode);
+}
+
+/**
+ * @brief Mark the init sequence as requested for one unit.
+ *
+ * Non-blocking; the sequence runs on the unit's polling thread.
+ *
+ * @return 0 on success, -1 if the unit is not found.
+ */
+int inverter_init_request(uint8_t uid)
+{
+    inverter_unit_t *unit = inverter_unit_from_uid(uid);
+    if (!unit) {
+        LOG_WARNING("[Inverter] inverter_init_request: uid=%u not found.", uid);
+        return -1;
+    }
+
+    atomic_store(&unit->init_requested, true);
+
+    LOG_INFO("[Inverter] init sequence requested for uid=%u.", uid);
+    return 0;
 }
 
 /* ── Callbacks ────────────────────────────────────────────────────────── */
@@ -317,7 +313,10 @@ static int inverter_rtu_init_callback(module_config_t *cfg)
 }
 
 /**
- * @brief process_callback – drain write queue, then read all mapped registers.
+ * @brief process_callback – run pending init, drain write queue, then read.
+ *
+ * Phase 0: execute a pending init request.  Taking the request clears it, so
+ *          it runs exactly once per request.
  *
  * Phase 1: drain the per-unit write queue under one bus_coord hold so a
  *          co-bus module cannot interleave until post-write settle completes.
@@ -340,6 +339,11 @@ static int inverter_rtu_process_callback(module_config_t *cfg)
     inverter_unit_t *unit = inverter_unit_from_config(cfg);
     if (!unit) {
         return -1;
+    }
+
+    /* ── Phase 0: run a pending init request ────────────────────────── */
+    if (atomic_exchange(&unit->init_requested, false)) {
+        run_init_sequence(unit);
     }
 
     /* ── Phase 1: drain the write command queue ─────────────────────── */
@@ -505,17 +509,37 @@ static void queue_destroy(inverter_cmd_queue_t *q)
 
 /**
  * @brief Push one write command onto the tail of the queue.
+ *
+ * Merge-allowed addresses (see inverter_queue_merge_allowed) update an
+ * existing pending single-register entry instead of consuming another slot.
+ *
  * @return 0 on success, -1 if the queue is full or count is out of range.
  */
 static int queue_push(inverter_cmd_queue_t *q, uint16_t addr,
                       const uint16_t *values, uint16_t count,
                       inverter_write_mode_t mode)
 {
-    if (count == 0 || count > MODBUS_MAX_WRITE_REGISTERS) {
+    if (!values || count == 0u || count > MODBUS_MAX_WRITE_REGISTERS) {
         return -1;
     }
 
     pthread_mutex_lock(&q->lock);
+
+    if (count == 1u && inverter_queue_merge_allowed(addr)) {
+        unsigned int idx = q->head;
+        for (unsigned int i = 0u; i < q->count; i++) {
+            inverter_write_cmd_t *entry = &q->entries[idx];
+
+            if (entry->addr == addr && entry->count == 1u) {
+                entry->mode = mode;
+                entry->values[0] = values[0];
+                pthread_mutex_unlock(&q->lock);
+                return 0;
+            }
+
+            idx = (idx + 1u) % INVERTER_CMD_QUEUE_CAPACITY;
+        }
+    }
 
     if (q->count >= INVERTER_CMD_QUEUE_CAPACITY) {
         pthread_mutex_unlock(&q->lock);
@@ -557,6 +581,61 @@ static int queue_pop(inverter_cmd_queue_t *q, inverter_write_cmd_t *out)
 }
 
 /* ── Internal helpers ─────────────────────────────────────────────────── */
+
+/**
+ * @brief Run the operator-initiated init sequence and record the result.
+ *
+ * Drives the inverter to a known idle state (zero frequency, stopped with
+ * acceleration enabled) and owns int_inverter_init_flag_reg end to end: cleared on
+ * entry so a repeated request starts from 0, set to 1 only once every write
+ * has been acknowledged by the device.  The CMOS bridge just publishes that
+ * slot; it never needs to know what init does.
+ *
+ * Runs on the unit's polling thread and holds the bus for the whole
+ * sequence, so the writes cannot be interleaved by a co-bus module.
+ */
+static void run_init_sequence(inverter_unit_t *unit)
+{
+    uint16_t frequency_cmd_val = 0;
+    uint16_t operation_cmd_val = INVERTER_STOP_BIT |
+                                 INVERTER_ENABLE_ACCELERATION_BIT;
+    bool writes_ok = true;
+
+    struct {
+        uint16_t addr;
+        const uint16_t *value;
+    } 
+    
+    writes[] = {
+        { dev_frequency_cmd_reg, &frequency_cmd_val },
+        { dev_operation_cmd_reg, &operation_cmd_val },
+    };
+
+    pool_write_register(int_inverter_init_flag_reg, 0);
+
+    bus_coord_acquire(unit->cfg->path);
+
+    for (size_t i = 0; i < sizeof(writes) / sizeof(writes[0]); i++) {
+        if (write_registers_locked(unit, writes[i].addr, writes[i].value,
+                                     1, INVERTER_WRITE_MODE_FC06) != 0) {
+            writes_ok = false;
+            break;
+        }
+        usleep(INVERTER_INTER_SEGMENT_DELAY_US);
+    }
+
+    usleep(INVERTER_POST_WRITE_SETTLE_US);
+    bus_coord_release(unit->cfg->path);
+
+    if (!writes_ok) {
+        LOG_ERROR("[Inverter RTU] %s: init sequence failed; "
+                  "init flag stays 0.", unit->cfg->name);
+        return;
+    }
+
+    pool_write_register(int_inverter_init_flag_reg, 1);
+    LOG_INFO("[Inverter RTU] %s: init sequence complete.", unit->cfg->name);
+}
 
 static inverter_unit_t *inverter_unit_from_config(const module_config_t *cfg)
 {
@@ -732,28 +811,61 @@ static void *inverter_rtu_thread(void *arg)
 }
 
 /**
- * @brief One-time inverter register programming (caller holds bus_coord).
+ * @brief Map config.json host baud to the inverter register code.
+ *
+ * Device encoding: register value = host_baud / 100 (e.g. 9600 -> 0x0060).
+ *
+ * @return true if host_baud is a valid multiple of 100, false otherwise.
+ */
+static bool inverter_baud_convert(uint32_t host_baud, uint16_t *out_reg)
+{
+    if (!out_reg || host_baud < 4800u || host_baud > 115200u || (host_baud % 100u) != 0u) {
+        return false;
+    }
+
+    uint32_t code = host_baud / 100u;
+    if (code > 0xFFFFu) {
+        return false;
+    }
+
+    *out_reg = (uint16_t)code;
+    return true;
+}
+
+/**
+ * @brief Inverter register programming on each connect (caller holds bus_coord).
  */
 static void init_inverter_reg(inverter_unit_t *unit)
 {
+    module_config_t *cfg = unit->cfg;
+
+    // system settings
     uint16_t frequency_souce_val = 0x0001; /* default RS-485 */
     uint16_t run_souce_val = 0x0002;       /* default RS-485 */
     uint16_t frequency_upper_val = 0x1766; /* default 5990 */
     uint16_t frequency_lower_val = 0x06F4; /* default 1780 */
     uint16_t acceleration_val = 0x03E8;    /* default 1000 */
     uint16_t deceleration_val = 0x03E8;    /* default 10 00*/
-    uint16_t slave_id_val = 0x0001;        /* default 1 */
-    uint16_t baud_rate_val = 0x0060;       /* default 9600 */
+    uint16_t slave_id_val = (uint16_t)cfg->modbus_uid;
+    uint16_t baud_rate_val = 0;
+    bool baud_reg_valid = inverter_baud_convert(
+                              (uint32_t)cfg->baud_rate, &baud_rate_val);
     uint16_t error_handle_val = 0x0001;    /* Slow down and stop */
     uint16_t serial_setting_val = 0x000C;  /* 8N1 */
     uint16_t s_speed_start_val = 0x0096;    /* default 150 */
     uint16_t s_speed_end_val = 0x0096;      /* default 150 */
     uint16_t s_deceleration_start_val = 0x0096; /* default 150 */
     uint16_t s_deceleration_end_val = 0x0096;   /* default 150 */
+
+    // device settings
+    uint16_t pump_duty_val = 0x0000;
+    uint16_t operation_cmd_val = INVERTER_STOP_BIT | INVERTER_ENABLE_ACCELERATION_BIT;
+
     struct {
         uint16_t        addr;
         const uint16_t *value;
     } writes[] = {
+        // system settings
         { dev_frequency_cmd_souce_reg,  &frequency_souce_val },
         { dev_run_cmd_souce_reg,        &run_souce_val },
         { dev_frequency_upper_limit_reg, &frequency_upper_val },
@@ -768,9 +880,23 @@ static void init_inverter_reg(inverter_unit_t *unit)
         { dev_s_speed_end_reg,          &s_speed_end_val },
         { dev_s_deceleration_start_reg, &s_deceleration_start_val },
         { dev_s_deceleration_end_reg,   &s_deceleration_end_val },
+
+        // device settings
+        {dev_frequency_cmd_reg,         &pump_duty_val},
+        {dev_operation_cmd_reg,         &operation_cmd_val},
     };
 
+    if (!baud_reg_valid) {
+        LOG_WARNING("[Inverter RTU] %s: unsupported baud_rate %d for device "
+                    "register 0x%04X; skipping baud write.",
+                    cfg->name, cfg->baud_rate, dev_baud_rate);
+    }
+
     for (size_t i = 0; i < sizeof(writes) / sizeof(writes[0]); i++) {
+        if (writes[i].addr == dev_baud_rate && !baud_reg_valid) {
+            continue;
+        }
+
         if (write_registers_locked(unit, writes[i].addr, writes[i].value,
                                      1, INVERTER_WRITE_MODE_FC06) == 0) {
             usleep(INVERTER_INTER_SEGMENT_DELAY_US);

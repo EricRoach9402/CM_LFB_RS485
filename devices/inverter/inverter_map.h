@@ -1,26 +1,8 @@
 /**
  * @file inverter_map.h
- * @brief Inverter device register profile.
+ * @brief Inverter1 profile and register address constants.
  *
- * This project currently implements exactly one Inverter hardware model,
- * inverter1_profile below.  Because there is only one, inverter_module.c
- * (and the CMOS bridge / alarm registration) reference it directly – no
- * uid- or config-driven lookup/selection mechanism exists, and none is
- * needed until a second hardware model is actually introduced.
- *
- * modbus_uid (config.json) is purely a wiring/deployment detail – which
- * slave address a unit answers to on the bus – and never selects a
- * profile.
- *
- * Adding a second hardware model (only once actually needed)
- * ────────────────────────────────────────────────────────────
- *  1. Add a mapping table in inverter_map.c with a unique pool_address
- *     range, plus a new device_map_profile_t definition.
- *  2. Declare the new profile below (extern const device_map_profile_t …).
- *  3. Introduce a real selection mechanism where profiles are currently
- *     referenced directly: start_inverter_modules() in inverter_module.c,
- *     on_write()/publish_all_pool_register() in inverter_cmos_bridge.c,
- *     and inverter_alarm_register_all() in inverter_alarm.c.
+ * Single hardware model; modbus_uid is set in config.json.
  */
 
 #ifndef INVERTER_MAP_H
@@ -28,10 +10,19 @@
 
 #include "device_register_map.h"
 
-/** Inverter1 model – pool region 0xB000-0xD1FF (see table for exact rows). */
+/* 0x2000: bit0 stop, bit1 run, bit12 enable acceleration */
+#define INVERTER_STOP_BIT (1 << 0)
+#define INVERTER_RUN_BIT (1 << 1)
+#define INVERTER_ENABLE_ACCELERATION_BIT (1 << 12)
+
+/* 0x2002: bit0 EF, bit1 reset, bit2 B.B, bit5 fire mode */
+#define INVERTER_EF_BIT (1 << 0)
+#define INVERTER_RESET_BIT (1 << 1)
+#define INVERTER_BB_BIT (1 << 2)
+#define INVERTER_FIRE_MODE_BIT (1 << 5)
+
 extern const device_map_profile_t inverter1_profile;
 
-// RW
 extern const uint16_t int_frequency_cmd_souce_reg;
 extern const uint16_t int_run_cmd_souce_reg;
 extern const uint16_t int_frequency_upper_limit_reg;
@@ -47,8 +38,6 @@ extern const uint16_t int_operation_cmd_reg;
 extern const uint16_t int_frequency_write_cmd_reg;
 extern const uint16_t int_fault_control_cmd_reg;
 
-
-// RO
 extern const uint16_t int_firmware_version_reg;
 extern const uint16_t int_fault_warning_code_reg;
 extern const uint16_t int_operation_status_reg;
@@ -59,7 +48,9 @@ extern const uint16_t int_dc_bus_voltage_reg;
 extern const uint16_t int_motor_actual_speed_reg;
 extern const uint16_t int_pid_feedback_value_reg;
 
-//device
+/* 0 = init pending, 1 = init complete (software pool slot). */
+extern const uint16_t int_inverter_init_flag_reg;
+
 extern const uint16_t dev_frequency_cmd_souce_reg;
 extern const uint16_t dev_run_cmd_souce_reg;
 
@@ -81,5 +72,8 @@ extern const uint16_t dev_mb_serial_setting_reg;
 
 extern const uint16_t dev_operation_cmd_reg;
 extern const uint16_t dev_frequency_cmd_reg;
-extern const uint16_t dev_fault_constrol_cmd_reg;
+extern const uint16_t dev_fault_control_cmd_reg;
+
+bool inverter_queue_merge_allowed(uint16_t device_address);
+
 #endif /* INVERTER_MAP_H */
