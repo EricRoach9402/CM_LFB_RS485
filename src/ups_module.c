@@ -16,18 +16,11 @@
 #include "bus_coord.h"
 #include "device_register_map.h"
 #include "log.h"
+#include "modbus_defaults.h"
 #include "modbus_rtu_client.h"
 #include "modbus_tcp_client.h"
 #include "ups/ups_map.h"
 #include "ups_cmos_bridge.h"
-
-#define UPS_RECONNECT_DELAY_MS 5000u
-#define UPS_COMM_FAIL_THRESHOLD 5
-#define UPS_INTER_SEGMENT_DELAY_US 40000u
-#define UPS_POST_WRITE_SETTLE_US 70000u
-#define UPS_SHUTDOWN_CHECK_INTERVAL_MS 100u
-
-#define UPS_CMD_QUEUE_CAPACITY 16u
 
 typedef struct {
     uint16_t addr;
@@ -37,7 +30,7 @@ typedef struct {
 } ups_write_cmd_t;
 
 typedef struct {
-    ups_write_cmd_t entries[UPS_CMD_QUEUE_CAPACITY];
+    ups_write_cmd_t entries[MODBUS_DEFAULT_CMD_QUEUE_CAPACITY];
     unsigned int head;
     unsigned int tail;
     unsigned int count;
@@ -321,18 +314,21 @@ static int ups_process_callback(module_config_t *cfg)
                             "continuing scan.",
                             cfg->name, cmd.addr);
             } else {
-                usleep(UPS_INTER_SEGMENT_DELAY_US);
+                usleep(MODBUS_DEFAULT_INTER_SEGMENT_DELAY_US);
             }
         } while (queue_pop(&unit->cmd_queue, &cmd) == 0);
 
-        usleep(UPS_POST_WRITE_SETTLE_US);
+        usleep(MODBUS_DEFAULT_POST_WRITE_SETTLE_US);
         bus_coord_release(path);
+    }
+    if (unit->profile->table_count == 0) {
+        return 0;
     }
     if (read_profile_to_pool(unit, true) != 0) {
         return -1;
     }
 
-    usleep((useconds_t)(cfg->rtu_poll_interval_ms * 1000u));
+    usleep((useconds_t)(MODBUS_DEFAULT_POLL_CYCLE_INTERVAL_MS * 1000u));
     return 0;
 }
 
@@ -383,9 +379,9 @@ static int read_profile_to_pool(ups_unit_t *unit, bool track_comm_fail)
             unit->comm_fail_count++;
             LOG_WARNING("[UPS] %s read 0x%04X len %u failed (err %d, fail %d/%d)",
                         cfg->name, start, count, result,
-                        unit->comm_fail_count, UPS_COMM_FAIL_THRESHOLD);
+                        unit->comm_fail_count, MODBUS_DEFAULT_COMM_FAIL_THRESHOLD);
 
-            if (unit->comm_fail_count >= UPS_COMM_FAIL_THRESHOLD) {
+            if (unit->comm_fail_count >= MODBUS_DEFAULT_COMM_FAIL_THRESHOLD) {
                 for (size_t k = 0; k < profile->table_count; k++) {
                     pool_write_register(profile->table[k].pool_address, 0xFFFF);
                 }
@@ -398,7 +394,7 @@ static int read_profile_to_pool(ups_unit_t *unit, bool track_comm_fail)
             device_map_read_to_pool(profile, buf, start, (int)count);
         }
 
-        usleep(UPS_INTER_SEGMENT_DELAY_US);
+        usleep(MODBUS_DEFAULT_INTER_SEGMENT_DELAY_US);
 
         seg_start = i;
         seg_len = 1;
@@ -448,12 +444,12 @@ static int ups_error_callback(module_config_t *cfg, int connection_state)
     shared_connection_state_set(cfg, (connection_state_t)connection_state);
 
     LOG_WARNING("[UPS] %s: disconnected (state=%d). Retrying in %u ms …",
-                cfg->name, connection_state, UPS_RECONNECT_DELAY_MS);
+                cfg->name, connection_state, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
 
     if (unit) {
-        interruptible_sleep_ms(unit, UPS_RECONNECT_DELAY_MS);
+        interruptible_sleep_ms(unit, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
     } else {
-        usleep(UPS_RECONNECT_DELAY_MS * 1000u);
+        usleep(MODBUS_DEFAULT_RECONNECT_DELAY_MS * 1000u);
     }
     return 0;
 }
@@ -532,11 +528,11 @@ static int queue_push(ups_cmd_queue_t *q, uint16_t addr,
                 return 0;
             }
 
-            idx = (idx + 1u) % UPS_CMD_QUEUE_CAPACITY;
+            idx = (idx + 1u) % MODBUS_DEFAULT_CMD_QUEUE_CAPACITY;
         }
     }
 
-    if (q->count >= UPS_CMD_QUEUE_CAPACITY) {
+    if (q->count >= MODBUS_DEFAULT_CMD_QUEUE_CAPACITY) {
         pthread_mutex_unlock(&q->lock);
         return -1;
     }
@@ -547,7 +543,7 @@ static int queue_push(ups_cmd_queue_t *q, uint16_t addr,
     entry->mode = mode;
     memcpy(entry->values, values, count * sizeof(uint16_t));
 
-    q->tail = (q->tail + 1u) % UPS_CMD_QUEUE_CAPACITY;
+    q->tail = (q->tail + 1u) % MODBUS_DEFAULT_CMD_QUEUE_CAPACITY;
     q->count++;
 
     pthread_mutex_unlock(&q->lock);
@@ -570,7 +566,7 @@ static int queue_pop(ups_cmd_queue_t *q, ups_write_cmd_t *out)
     }
 
     *out = q->entries[q->head];
-    q->head = (q->head + 1u) % UPS_CMD_QUEUE_CAPACITY;
+    q->head = (q->head + 1u) % MODBUS_DEFAULT_CMD_QUEUE_CAPACITY;
     q->count--;
 
     pthread_mutex_unlock(&q->lock);
@@ -618,8 +614,8 @@ static void interruptible_sleep_ms(const ups_unit_t *unit, uint32_t duration_ms)
     uint32_t elapsed_ms = 0;
 
     while (elapsed_ms < duration_ms && unit->running) {
-        usleep(UPS_SHUTDOWN_CHECK_INTERVAL_MS * 1000u);
-        elapsed_ms += UPS_SHUTDOWN_CHECK_INTERVAL_MS;
+        usleep(MODBUS_DEFAULT_SHUTDOWN_CHECK_INTERVAL_MS * 1000u);
+        elapsed_ms += MODBUS_DEFAULT_SHUTDOWN_CHECK_INTERVAL_MS;
     }
 }
 
@@ -651,7 +647,7 @@ static int unit_connect(ups_unit_t *unit)
     if (cfg->format == MODBUS_FORMAT_TCP) {
         mb_tcp_client_config_t tcp_cfg = {
             .remote_host = cfg->ip,
-            .port = (cfg->port > 0) ? (uint16_t)cfg->port : 502u,
+            .port = (uint16_t)cfg->port,
             .unit_id = (uint8_t)cfg->modbus_uid,
             .connect_timeout_sec = 5,
             .response_timeout_ms = 1000,
@@ -839,7 +835,7 @@ static int write_registers_to_device(ups_unit_t *unit,
     bus_coord_acquire(path);
     int result = write_registers_locked(unit, addr, values, count, mode);
     if (result == 0) {
-        usleep(UPS_POST_WRITE_SETTLE_US);
+        usleep(MODBUS_DEFAULT_POST_WRITE_SETTLE_US);
     }
     bus_coord_release(path);
     return result;
@@ -861,7 +857,7 @@ static void *ups_thread(void *arg)
     while (unit->running) {
         if (unit->callbacks.init_callback(cfg) != 0) {
             LOG_ERROR("[UPS] %s: init failed, will retry.", cfg->name);
-            interruptible_sleep_ms(unit, UPS_RECONNECT_DELAY_MS);
+            interruptible_sleep_ms(unit, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
             continue;
         }
         while (unit->running) {

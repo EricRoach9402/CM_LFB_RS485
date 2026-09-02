@@ -40,6 +40,8 @@ static void signal_handler(int sig);
 static bool family_has_enabled(const module_config_t *units, int count);
 static pid_t fork_cmos_publisher(const char *label, void (*pub_run)(void));
 static void stop_cmos_publisher(pid_t *pid, const char *label);
+static void shutdown_runtime(void);
+static int startup_failed(const char *reason);
 
 /**
  * @brief Daemon entry point.
@@ -75,32 +77,32 @@ int main(int argc, char **argv)
         g_inverter_pub_pid = fork_cmos_publisher("Inverter",
                                                  inverter_cmos_pub_run);
         if (g_inverter_pub_pid < 0) {
-            LOG_ERROR("Inverter CMOS publisher failed to start.");
+            return startup_failed("Inverter CMOS publisher failed to start.");
         }
     }
 
     if (family_has_enabled(global_config.ups, global_config.ups_count)) {
         g_ups_pub_pid = fork_cmos_publisher("UPS", ups_cmos_pub_run);
         if (g_ups_pub_pid < 0) {
-            LOG_ERROR("UPS CMOS publisher failed to start.");
+            return startup_failed("UPS CMOS publisher failed to start.");
         }
     }
 
     if (start_inverter_modules(global_config.inverter,
                                global_config.inverter_count) != 0) {
-        LOG_ERROR("One or more Inverter modules failed to start.");
+        return startup_failed("One or more Inverter modules failed to start.");
     }
 
     if (start_ups_modules(global_config.ups,
                           global_config.ups_count) != 0) {
-        LOG_ERROR("One or more UPS modules failed to start.");
+        return startup_failed("One or more UPS modules failed to start.");
     }
 
     inverter_alarm_register_all();
     ups_alarm_register_all();
 
     if (alarm_bridge_start() != 0) {
-        LOG_ERROR("Alarm bridge failed to start.");
+        return startup_failed("Alarm bridge failed to start.");
     }
 
     LOG_INFO("All modules started. Waiting for shutdown signal …");
@@ -109,13 +111,7 @@ int main(int argc, char **argv)
         sleep(1);
     }
 
-    alarm_bridge_stop();
-    stop_inverter_modules();
-    stop_ups_modules();
-    alarm_manager_close();
-
-    stop_cmos_publisher(&g_inverter_pub_pid, "Inverter");
-    stop_cmos_publisher(&g_ups_pub_pid, "UPS");
+    shutdown_runtime();
 
     LOG_INFO("Shutdown complete.");
     return 0;
@@ -242,4 +238,30 @@ static void stop_cmos_publisher(pid_t *pid, const char *label)
     }
 
     *pid = -1;
+}
+
+/**
+ * @brief Stop modules, alarm bridge, and CMOS publisher children.
+ */
+static void shutdown_runtime(void)
+{
+    alarm_bridge_stop();
+    stop_inverter_modules();
+    stop_ups_modules();
+    alarm_manager_close();
+    stop_cmos_publisher(&g_inverter_pub_pid, "Inverter");
+    stop_cmos_publisher(&g_ups_pub_pid, "UPS");
+}
+
+/**
+ * @brief Log startup failure, tear down partial runtime, and exit non-zero.
+ * @param reason Human-readable failure reason.
+ * @return EXIT_FAILURE for main().
+ */
+static int startup_failed(const char *reason)
+{
+    LOG_ERROR("%s", reason);
+    shutdown_runtime();
+    LOG_INFO("Startup aborted.");
+    return EXIT_FAILURE;
 }

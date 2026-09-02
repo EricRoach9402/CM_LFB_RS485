@@ -1,6 +1,6 @@
 /**
  * @file inverter_module.c
- * @brief Inverter Modbus RTU polling.
+ * @brief Inverter Modbus RTU/TCP polling.
  */
 
 #include <pthread.h>
@@ -18,15 +18,9 @@
 #include "inverter/inverter_map.h"
 #include "inverter_cmos_bridge.h"
 #include "log.h"
+#include "modbus_defaults.h"
 #include "modbus_rtu_client.h"
-
-#define INVERTER_RECONNECT_DELAY_MS 5000u
-#define INVERTER_COMM_FAIL_THRESHOLD 5
-#define INVERTER_INTER_SEGMENT_DELAY_US 40000u
-#define INVERTER_POST_WRITE_SETTLE_US 70000u
-#define INVERTER_SHUTDOWN_CHECK_INTERVAL_MS 100u
-
-#define INVERTER_CMD_QUEUE_CAPACITY 16u
+#include "modbus_tcp_client.h"
 
 typedef struct {
     uint16_t addr;
@@ -36,7 +30,7 @@ typedef struct {
 } inverter_write_cmd_t;
 
 typedef struct {
-    inverter_write_cmd_t entries[INVERTER_CMD_QUEUE_CAPACITY];
+    inverter_write_cmd_t entries[MODBUS_DEFAULT_CMD_QUEUE_CAPACITY];
     unsigned int head;
     unsigned int tail;
     unsigned int count;
@@ -46,6 +40,7 @@ typedef struct {
 typedef struct {
     module_config_t *cfg;
     const device_map_profile_t *profile;
+    mb_tcp_client_ctx_t tcp_ctx;
     mb_rtu_client_ctx_t rtu_ctx;
     module_callbacks_t callbacks;
     pthread_t thread;
@@ -55,23 +50,40 @@ typedef struct {
     atomic_bool init_requested;
 } inverter_unit_t;
 
-static int inverter_rtu_init_callback(module_config_t *cfg);
-static int inverter_rtu_process_callback(module_config_t *cfg);
-static int inverter_rtu_error_callback(module_config_t *cfg, int connection_state);
-static int inverter_msg_callback(module_config_t *cfg, uint16_t addr, uint16_t *values, size_t count);
 static void queue_init(inverter_cmd_queue_t *q);
 static void queue_destroy(inverter_cmd_queue_t *q);
-static int queue_push(inverter_cmd_queue_t *q, uint16_t addr, const uint16_t *values, uint16_t count, inverter_write_mode_t mode);
+static int queue_push(inverter_cmd_queue_t *q, uint16_t addr,
+                      const uint16_t *values, uint16_t count,
+                      inverter_write_mode_t mode);
 static int queue_pop(inverter_cmd_queue_t *q, inverter_write_cmd_t *out);
 static void run_init_sequence(inverter_unit_t *unit);
 static inverter_unit_t *inverter_unit_from_config(const module_config_t *cfg);
 static inverter_unit_t *inverter_unit_from_uid(uint8_t uid);
 static void interruptible_sleep_ms(const inverter_unit_t *unit, uint32_t duration_ms);
-static int write_registers_locked(inverter_unit_t *unit, uint16_t addr, const uint16_t *values, uint16_t count, inverter_write_mode_t mode);
-static int write_registers_to_device(inverter_unit_t *unit, uint16_t addr, const uint16_t *values, uint16_t count, inverter_write_mode_t mode);
+static const char *inverter_bus_path(const inverter_unit_t *unit);
+static int unit_connect(inverter_unit_t *unit);
+static void unit_disconnect(inverter_unit_t *unit);
+static int unit_read_holding_registers(inverter_unit_t *unit, uint16_t addr,
+                                       uint16_t count, uint16_t *out);
+static int write_registers_locked(inverter_unit_t *unit,
+                                  uint16_t addr,
+                                  const uint16_t *values,
+                                  uint16_t count,
+                                  inverter_write_mode_t mode);
+static int write_registers_to_device(inverter_unit_t *unit,
+                                     uint16_t addr,
+                                     const uint16_t *values,
+                                     uint16_t count,
+                                     inverter_write_mode_t mode);
+static int read_profile_to_pool(inverter_unit_t *unit, bool track_comm_fail);
 static bool inverter_baud_convert(uint32_t host_baud, uint16_t *out_reg);
 static void init_inverter_reg(inverter_unit_t *unit);
-static void *inverter_rtu_thread(void *arg);
+static int inverter_init_callback(module_config_t *cfg);
+static int inverter_process_callback(module_config_t *cfg);
+static int inverter_error_callback(module_config_t *cfg, int connection_state);
+static int inverter_msg_callback(module_config_t *cfg, uint16_t addr,
+                                 uint16_t *values, size_t count);
+static void *inverter_thread(void *arg);
 
 static inverter_unit_t inverter_units[MAX_INVERTER_COUNT];
 static int inverter_unit_count = 0;
@@ -110,26 +122,27 @@ int start_inverter_modules(module_config_t inverters[], int inverter_count)
         unit->profile = profile;
         unit->running = 1;
         unit->comm_fail_count = 0;
+        memset(&unit->tcp_ctx, 0, sizeof(unit->tcp_ctx));
         memset(&unit->rtu_ctx, 0, sizeof(unit->rtu_ctx));
         unit->rtu_ctx.fd = -1;
         queue_init(&unit->cmd_queue);
         atomic_init(&unit->init_requested, false);
 
-        unit->callbacks.init_callback = inverter_rtu_init_callback;
-        unit->callbacks.process_callback = inverter_rtu_process_callback;
-        unit->callbacks.error_callback = inverter_rtu_error_callback;
+        unit->callbacks.init_callback = inverter_init_callback;
+        unit->callbacks.process_callback = inverter_process_callback;
+        unit->callbacks.error_callback = inverter_error_callback;
         unit->callbacks.msg_callback = inverter_msg_callback;
         unit->callbacks.start_callback = NULL;
 
         inverter_unit_count++;
 
-        LOG_INFO("[Inverter] Starting %s (profile=%s uid=%d).",
+        LOG_INFO("[Inverter] Starting %s (profile=%s uid=%d format=%s).",
                  unit->cfg->name,
                  unit->profile->name,
-                 unit->cfg->modbus_uid);
+                 unit->cfg->modbus_uid,
+                 (unit->cfg->format == MODBUS_FORMAT_TCP) ? "TCP" : "RTU");
 
-        if (pthread_create(&unit->thread, NULL,
-                           inverter_rtu_thread, unit) != 0) {
+        if (pthread_create(&unit->thread, NULL, inverter_thread, unit) != 0) {
             LOG_ERROR("[Inverter] Failed to create thread for %s.",
                       unit->cfg->name);
             queue_destroy(&unit->cmd_queue);
@@ -244,11 +257,11 @@ int inverter_init_request(uint8_t uid)
 }
 
 /**
- * @brief init_callback – open serial port and program device registers.
+ * @brief init_callback – connect the unit transport.
  * @param cfg Module configuration.
  * @return 0 on success, -1 on failure.
  */
-static int inverter_rtu_init_callback(module_config_t *cfg)
+static int inverter_init_callback(module_config_t *cfg)
 {
     if (!cfg) {
         LOG_ERROR("[Inverter] Invalid configuration.");
@@ -261,49 +274,15 @@ static int inverter_rtu_init_callback(module_config_t *cfg)
         return -1;
     }
 
-    mb_rtu_client_config_t rtu_cfg = {
-        .serial_path = cfg->path,
-        .baud_rate = (uint32_t)cfg->baud_rate,
-        .unit_id = (uint8_t)cfg->modbus_uid,
-        .response_timeout_ms = 1000u,
-    };
-
-    LOG_INFO("[Inverter] %s: opening %s @ %u baud uid=%d",
-             cfg->name, cfg->path, cfg->baud_rate, cfg->modbus_uid);
-
-    if (mb_rtu_client_connect(&unit->rtu_ctx, &rtu_cfg) != 0) {
-        LOG_ERROR("[Inverter] %s: failed to open serial port %s.",
-                  cfg->name, cfg->path);
+    if (unit_connect(unit) != 0) {
         return -1;
     }
-
-    bus_coord_acquire(cfg->path);
-
-    /* FC03 probe: open serial port does not prove a slave is present. */
-    if (unit->profile->table_count > 0) {
-        uint16_t probe_addr = unit->profile->table[0].device_address;
-
-        if (mb_rtu_client_probe_device(&unit->rtu_ctx, probe_addr, 1) !=
-            MB_RTU_CLIENT_OK) {
-            LOG_ERROR("[Inverter] %s: device not responding on %s "
-                      "(uid=%d).", cfg->name, cfg->path, cfg->modbus_uid);
-            bus_coord_release(cfg->path);
-            mb_rtu_client_disconnect(&unit->rtu_ctx);
-            return -1;
-        }
-    }
-
-    init_inverter_reg(unit);
-    usleep(INVERTER_POST_WRITE_SETTLE_US);
-    bus_coord_release(cfg->path);
 
     unit->comm_fail_count = 0;
     cfg->connection_state = CONNECTION_CONNECTED;
     shared_connection_state_set(cfg, CONNECTION_CONNECTED);
 
-    LOG_INFO("[Inverter] %s: serial port open, device responding.",
-             cfg->name);
-
+    LOG_INFO("[Inverter] %s: connected.", cfg->name);
     return 0;
 }
 
@@ -312,7 +291,7 @@ static int inverter_rtu_init_callback(module_config_t *cfg)
  * @param cfg Module configuration.
  * @return 0 on success, -1 on communication failure.
  */
-static int inverter_rtu_process_callback(module_config_t *cfg)
+static int inverter_process_callback(module_config_t *cfg)
 {
     if (!cfg) {
         return -1;
@@ -327,7 +306,9 @@ static int inverter_rtu_process_callback(module_config_t *cfg)
     }
     inverter_write_cmd_t cmd;
     if (queue_pop(&unit->cmd_queue, &cmd) == 0) {
-        bus_coord_acquire(cfg->path);
+        const char *path = inverter_bus_path(unit);
+
+        bus_coord_acquire(path);
 
         do {
             if (write_registers_locked(unit, cmd.addr, cmd.values,
@@ -335,13 +316,33 @@ static int inverter_rtu_process_callback(module_config_t *cfg)
                 LOG_WARNING("[Inverter] %s: queued write to 0x%04X failed, "
                             "continuing scan.", cfg->name, cmd.addr);
             } else {
-                usleep(INVERTER_INTER_SEGMENT_DELAY_US);
+                usleep(MODBUS_DEFAULT_INTER_SEGMENT_DELAY_US);
             }
         } while (queue_pop(&unit->cmd_queue, &cmd) == 0);
 
-        usleep(INVERTER_POST_WRITE_SETTLE_US);
-        bus_coord_release(cfg->path);
+        usleep(MODBUS_DEFAULT_POST_WRITE_SETTLE_US);
+        bus_coord_release(path);
     }
+    if (unit->profile->table_count == 0) {
+        return 0;
+    }
+    if (read_profile_to_pool(unit, true) != 0) {
+        return -1;
+    }
+
+    usleep((useconds_t)(MODBUS_DEFAULT_POLL_CYCLE_INTERVAL_MS * 1000u));
+    return 0;
+}
+
+/**
+ * @brief Read all mapped registers into the pool.
+ * @param unit Target unit.
+ * @param track_comm_fail Update comm_fail_count when true.
+ * @return 0 on success, -1 on read failure.
+ */
+static int read_profile_to_pool(inverter_unit_t *unit, bool track_comm_fail)
+{
+    module_config_t *cfg = unit->cfg;
     const device_map_profile_t *profile = unit->profile;
 
     if (profile->table_count == 0) {
@@ -368,46 +369,49 @@ static int inverter_rtu_process_callback(module_config_t *cfg)
         uint16_t start = profile->table[seg_start].device_address;
         uint16_t count = (uint16_t)seg_len;
 
-        bus_coord_acquire(cfg->path);
-        int result = mb_rtu_client_read_holding_registers(
-            &unit->rtu_ctx, start, count, buf);
-        bus_coord_release(cfg->path);
+        int result = unit_read_holding_registers(unit, start, count, buf);
 
-        if (result != MB_RTU_CLIENT_OK) {
+        if (result != 0) {
+            if (!track_comm_fail) {
+                LOG_WARNING("[Inverter] %s init read 0x%04X len %u failed (err %d).",
+                            cfg->name, start, count, result);
+                return -1;
+            }
+
             unit->comm_fail_count++;
-            LOG_WARNING("[Inverter] %s read 0x%04X len %u failed "
-                        "(err %d, fail %d/%d)",
+            LOG_WARNING("[Inverter] %s read 0x%04X len %u failed (err %d, fail %d/%d)",
                         cfg->name, start, count, result,
-                        unit->comm_fail_count, INVERTER_COMM_FAIL_THRESHOLD);
+                        unit->comm_fail_count, MODBUS_DEFAULT_COMM_FAIL_THRESHOLD);
 
-            if (unit->comm_fail_count >= INVERTER_COMM_FAIL_THRESHOLD) {
+            if (unit->comm_fail_count >= MODBUS_DEFAULT_COMM_FAIL_THRESHOLD) {
                 for (size_t k = 0; k < profile->table_count; k++) {
                     pool_write_register(profile->table[k].pool_address, 0xFFFF);
                 }
                 return -1;
             }
         } else {
-            unit->comm_fail_count = 0;
+            if (track_comm_fail) {
+                unit->comm_fail_count = 0;
+            }
             device_map_read_to_pool(profile, buf, start, (int)count);
         }
 
-        usleep(INVERTER_INTER_SEGMENT_DELAY_US);
+        usleep(MODBUS_DEFAULT_INTER_SEGMENT_DELAY_US);
 
         seg_start = i;
         seg_len = 1;
     }
 
-    usleep((useconds_t)(cfg->rtu_poll_interval_ms * 1000u));
     return 0;
 }
 
 /**
- * @brief error_callback – close serial port and wait before reconnect.
+ * @brief error_callback – disconnect and wait before reconnect.
  * @param cfg Module configuration.
  * @param connection_state New connection state.
  * @return 0.
  */
-static int inverter_rtu_error_callback(module_config_t *cfg, int connection_state)
+static int inverter_error_callback(module_config_t *cfg, int connection_state)
 {
     if (!cfg) {
         return 0;
@@ -415,7 +419,7 @@ static int inverter_rtu_error_callback(module_config_t *cfg, int connection_stat
 
     inverter_unit_t *unit = inverter_unit_from_config(cfg);
     if (unit) {
-        mb_rtu_client_disconnect(&unit->rtu_ctx);
+        unit_disconnect(unit);
         unit->comm_fail_count = 0;
     }
 
@@ -424,12 +428,12 @@ static int inverter_rtu_error_callback(module_config_t *cfg, int connection_stat
 
     LOG_WARNING("[Inverter] %s: disconnected (state=%d). "
                 "Retrying in %u ms …",
-                cfg->name, connection_state, INVERTER_RECONNECT_DELAY_MS);
+                cfg->name, connection_state, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
 
     if (unit) {
-        interruptible_sleep_ms(unit, INVERTER_RECONNECT_DELAY_MS);
+        interruptible_sleep_ms(unit, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
     } else {
-        usleep(INVERTER_RECONNECT_DELAY_MS * 1000u);
+        usleep(MODBUS_DEFAULT_RECONNECT_DELAY_MS * 1000u);
     }
     return 0;
 }
@@ -443,7 +447,7 @@ static int inverter_rtu_error_callback(module_config_t *cfg, int connection_stat
  * @return 0 on success, -1 on failure.
  */
 static int inverter_msg_callback(module_config_t *cfg,
-                                  uint16_t addr, uint16_t *values, size_t count)
+                                 uint16_t addr, uint16_t *values, size_t count)
 {
     if (!cfg || !values || count == 0) {
         return -1;
@@ -511,11 +515,11 @@ static int queue_push(inverter_cmd_queue_t *q, uint16_t addr,
                 return 0;
             }
 
-            idx = (idx + 1u) % INVERTER_CMD_QUEUE_CAPACITY;
+            idx = (idx + 1u) % MODBUS_DEFAULT_CMD_QUEUE_CAPACITY;
         }
     }
 
-    if (q->count >= INVERTER_CMD_QUEUE_CAPACITY) {
+    if (q->count >= MODBUS_DEFAULT_CMD_QUEUE_CAPACITY) {
         pthread_mutex_unlock(&q->lock);
         return -1;
     }
@@ -526,7 +530,7 @@ static int queue_push(inverter_cmd_queue_t *q, uint16_t addr,
     entry->mode = mode;
     memcpy(entry->values, values, count * sizeof(uint16_t));
 
-    q->tail = (q->tail + 1u) % INVERTER_CMD_QUEUE_CAPACITY;
+    q->tail = (q->tail + 1u) % MODBUS_DEFAULT_CMD_QUEUE_CAPACITY;
     q->count++;
 
     pthread_mutex_unlock(&q->lock);
@@ -549,7 +553,7 @@ static int queue_pop(inverter_cmd_queue_t *q, inverter_write_cmd_t *out)
     }
 
     *out = q->entries[q->head];
-    q->head = (q->head + 1u) % INVERTER_CMD_QUEUE_CAPACITY;
+    q->head = (q->head + 1u) % MODBUS_DEFAULT_CMD_QUEUE_CAPACITY;
     q->count--;
 
     pthread_mutex_unlock(&q->lock);
@@ -577,19 +581,21 @@ static void run_init_sequence(inverter_unit_t *unit)
 
     pool_write_register(int_inverter_init_flag_reg, 0);
 
-    bus_coord_acquire(unit->cfg->path);
+    const char *path = inverter_bus_path(unit);
+
+    bus_coord_acquire(path);
 
     for (size_t i = 0; i < sizeof(writes) / sizeof(writes[0]); i++) {
         if (write_registers_locked(unit, writes[i].addr, writes[i].value,
-                                    1, INVERTER_WRITE_MODE_FC06) != 0) {
+                                   1, INVERTER_WRITE_MODE_FC06) != 0) {
             writes_ok = false;
             break;
         }
-        usleep(INVERTER_INTER_SEGMENT_DELAY_US);
+        usleep(MODBUS_DEFAULT_INTER_SEGMENT_DELAY_US);
     }
 
-    usleep(INVERTER_POST_WRITE_SETTLE_US);
-    bus_coord_release(unit->cfg->path);
+    usleep(MODBUS_DEFAULT_POST_WRITE_SETTLE_US);
+    bus_coord_release(path);
 
     if (!writes_ok) {
         LOG_ERROR("[Inverter] %s: init sequence failed; "
@@ -643,9 +649,134 @@ static void interruptible_sleep_ms(const inverter_unit_t *unit,
     uint32_t elapsed_ms = 0;
 
     while (elapsed_ms < duration_ms && unit->running) {
-        usleep(INVERTER_SHUTDOWN_CHECK_INTERVAL_MS * 1000u);
-        elapsed_ms += INVERTER_SHUTDOWN_CHECK_INTERVAL_MS;
+        usleep(MODBUS_DEFAULT_SHUTDOWN_CHECK_INTERVAL_MS * 1000u);
+        elapsed_ms += MODBUS_DEFAULT_SHUTDOWN_CHECK_INTERVAL_MS;
     }
+}
+
+/**
+ * @brief Return RS-485 serial path for bus_coord, or NULL for TCP.
+ * @param unit Target unit.
+ * @return Serial path for RTU units, NULL otherwise.
+ */
+static const char *inverter_bus_path(const inverter_unit_t *unit)
+{
+    if (!unit || !unit->cfg) {
+        return NULL;
+    }
+    if (unit->cfg->format != MODBUS_FORMAT_RTU) {
+        return NULL;
+    }
+    return unit->cfg->path;
+}
+
+/**
+ * @brief Connect TCP or RTU transport for one unit.
+ * @param unit Target unit.
+ * @return 0 on success, -1 on failure.
+ */
+static int unit_connect(inverter_unit_t *unit)
+{
+    module_config_t *cfg = unit->cfg;
+
+    if (cfg->format == MODBUS_FORMAT_TCP) {
+        mb_tcp_client_config_t tcp_cfg = {
+            .remote_host = cfg->ip,
+            .port = (uint16_t)cfg->port,
+            .unit_id = (uint8_t)cfg->modbus_uid,
+            .connect_timeout_sec = 5,
+            .response_timeout_ms = 1000,
+            .logv = NULL,
+            .log_userdata = NULL,
+        };
+
+        LOG_INFO("[Inverter] %s: connecting to %s:%d uid=%d",
+                 cfg->name, cfg->ip, cfg->port, cfg->modbus_uid);
+
+        if (mb_tcp_client_connect(&unit->tcp_ctx, &tcp_cfg) != 0) {
+            LOG_ERROR("[Inverter] %s: TCP connection failed.", cfg->name);
+            return -1;
+        }
+        return 0;
+    }
+
+    mb_rtu_client_config_t rtu_cfg = {
+        .serial_path = cfg->path,
+        .baud_rate = (uint32_t)cfg->baud_rate,
+        .unit_id = (uint8_t)cfg->modbus_uid,
+        .response_timeout_ms = 1000u,
+    };
+
+    LOG_INFO("[Inverter] %s: opening %s @ %u baud uid=%d",
+             cfg->name, cfg->path, cfg->baud_rate, cfg->modbus_uid);
+
+    if (mb_rtu_client_connect(&unit->rtu_ctx, &rtu_cfg) != 0) {
+        LOG_ERROR("[Inverter] %s: failed to open serial port %s.",
+                  cfg->name, cfg->path);
+        return -1;
+    }
+
+    const char *path = inverter_bus_path(unit);
+
+    bus_coord_acquire(path);
+
+    if (unit->profile->table_count > 0) {
+        uint16_t probe_addr = unit->profile->table[0].device_address;
+
+        if (mb_rtu_client_probe_device(&unit->rtu_ctx, probe_addr, 1) !=
+            MB_RTU_CLIENT_OK) {
+            LOG_ERROR("[Inverter] %s: device not responding on %s (uid=%d).",
+                      cfg->name, cfg->path, cfg->modbus_uid);
+            bus_coord_release(path);
+            mb_rtu_client_disconnect(&unit->rtu_ctx);
+            return -1;
+        }
+    }
+
+    init_inverter_reg(unit);
+    usleep(MODBUS_DEFAULT_POST_WRITE_SETTLE_US);
+    bus_coord_release(path);
+
+    return 0;
+}
+
+/**
+ * @brief Disconnect TCP or RTU transport for one unit.
+ * @param unit Target unit.
+ */
+static void unit_disconnect(inverter_unit_t *unit)
+{
+    if (unit->cfg->format == MODBUS_FORMAT_TCP) {
+        mb_tcp_client_disconnect(&unit->tcp_ctx);
+    } else {
+        mb_rtu_client_disconnect(&unit->rtu_ctx);
+    }
+}
+
+/**
+ * @brief FC03 read via active transport.
+ * @param unit Target unit.
+ * @param addr Start register address.
+ * @param count Number of registers.
+ * @param out Output buffer.
+ * @return 0 on success, or a transport/Modbus error code.
+ */
+static int unit_read_holding_registers(inverter_unit_t *unit, uint16_t addr,
+                                       uint16_t count, uint16_t *out)
+{
+    if (unit->cfg->format == MODBUS_FORMAT_TCP) {
+        return mb_tcp_client_read_holding_registers(
+            &unit->tcp_ctx, addr, count, out);
+    }
+
+    const char *path = inverter_bus_path(unit);
+    int result;
+
+    bus_coord_acquire(path);
+    result = mb_rtu_client_read_holding_registers(
+        &unit->rtu_ctx, addr, count, out);
+    bus_coord_release(path);
+    return result;
 }
 
 /**
@@ -663,6 +794,7 @@ static int write_registers_locked(inverter_unit_t *unit,
                                   uint16_t count,
                                   inverter_write_mode_t mode)
 {
+    bool is_tcp = (unit->cfg->format == MODBUS_FORMAT_TCP);
     int result;
 
     switch (mode) {
@@ -672,26 +804,39 @@ static int write_registers_locked(inverter_unit_t *unit,
                       unit->cfg->name, count, addr);
             return -1;
         }
-        result = mb_rtu_client_write_single_register(
-                     &unit->rtu_ctx, addr, values[0]);
+        result = is_tcp
+                 ? mb_tcp_client_write_single_register(
+                       &unit->tcp_ctx, addr, values[0])
+                 : mb_rtu_client_write_single_register(
+                       &unit->rtu_ctx, addr, values[0]);
         break;
     case INVERTER_WRITE_MODE_FC16:
-        result = mb_rtu_client_write_multiple_registers(
-                     &unit->rtu_ctx, addr, count, values);
+        result = is_tcp
+                 ? mb_tcp_client_write_multiple_registers(
+                       &unit->tcp_ctx, addr, count, values)
+                 : mb_rtu_client_write_multiple_registers(
+                       &unit->rtu_ctx, addr, count, values);
         break;
     case INVERTER_WRITE_MODE_AUTO:
     default:
         if (count == 1) {
-            result = mb_rtu_client_write_single_register(
-                         &unit->rtu_ctx, addr, values[0]);
+            result = is_tcp
+                     ? mb_tcp_client_write_single_register(
+                           &unit->tcp_ctx, addr, values[0])
+                     : mb_rtu_client_write_single_register(
+                           &unit->rtu_ctx, addr, values[0]);
         } else {
-            result = mb_rtu_client_write_multiple_registers(
-                         &unit->rtu_ctx, addr, count, values);
+            result = is_tcp
+                     ? mb_tcp_client_write_multiple_registers(
+                           &unit->tcp_ctx, addr, count, values)
+                     : mb_rtu_client_write_multiple_registers(
+                           &unit->rtu_ctx, addr, count, values);
         }
         break;
     }
 
-    if (result != MB_RTU_CLIENT_OK) {
+    if (is_tcp ? (result != MB_TCP_CLIENT_OK)
+               : (result != MB_RTU_CLIENT_OK)) {
         LOG_ERROR("[Inverter] %s: write to 0x%04X failed (err %d).",
                   unit->cfg->name, addr, result);
         return -1;
@@ -736,12 +881,12 @@ static int write_registers_to_device(inverter_unit_t *unit,
                                      uint16_t count,
                                      inverter_write_mode_t mode)
 {
-    const char *path = unit->cfg->path;
+    const char *path = inverter_bus_path(unit);
 
     bus_coord_acquire(path);
     int result = write_registers_locked(unit, addr, values, count, mode);
     if (result == 0) {
-        usleep(INVERTER_POST_WRITE_SETTLE_US);
+        usleep(MODBUS_DEFAULT_POST_WRITE_SETTLE_US);
     }
     bus_coord_release(path);
     return result;
@@ -752,7 +897,7 @@ static int write_registers_to_device(inverter_unit_t *unit,
  * @param arg inverter_unit_t pointer.
  * @return NULL.
  */
-static void *inverter_rtu_thread(void *arg)
+static void *inverter_thread(void *arg)
 {
     inverter_unit_t *unit = (inverter_unit_t *)arg;
     module_config_t *cfg = unit->cfg;
@@ -763,7 +908,7 @@ static void *inverter_rtu_thread(void *arg)
     while (unit->running) {
         if (unit->callbacks.init_callback(cfg) != 0) {
             LOG_ERROR("[Inverter] %s: init failed, will retry.", cfg->name);
-            interruptible_sleep_ms(unit, INVERTER_RECONNECT_DELAY_MS);
+            interruptible_sleep_ms(unit, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
             continue;
         }
         while (unit->running) {
@@ -776,7 +921,7 @@ static void *inverter_rtu_thread(void *arg)
         }
     }
 
-    mb_rtu_client_disconnect(&unit->rtu_ctx);
+    unit_disconnect(unit);
     LOG_INFO("[Inverter] Thread stopped: %s", cfg->name);
     return NULL;
 }
@@ -789,7 +934,8 @@ static void *inverter_rtu_thread(void *arg)
  */
 static bool inverter_baud_convert(uint32_t host_baud, uint16_t *out_reg)
 {
-    if (!out_reg || host_baud < 4800u || host_baud > 115200u || (host_baud % 100u) != 0u) {
+    if (!out_reg || host_baud < 4800u || host_baud > 115200u ||
+        (host_baud % 100u) != 0u) {
         return false;
     }
 
@@ -803,7 +949,7 @@ static bool inverter_baud_convert(uint32_t host_baud, uint16_t *out_reg)
 }
 
 /**
- * @brief Program inverter registers on connect; caller holds bus.
+ * @brief Program inverter registers on RTU connect; caller holds bus.
  * @param unit Target unit.
  */
 static void init_inverter_reg(inverter_unit_t *unit)
@@ -862,8 +1008,8 @@ static void init_inverter_reg(inverter_unit_t *unit)
         }
 
         if (write_registers_locked(unit, writes[i].addr, writes[i].value,
-                                    1, INVERTER_WRITE_MODE_FC06) == 0) {
-            usleep(INVERTER_INTER_SEGMENT_DELAY_US);
+                                   1, INVERTER_WRITE_MODE_FC06) == 0) {
+            usleep(MODBUS_DEFAULT_INTER_SEGMENT_DELAY_US);
         }
     }
 }

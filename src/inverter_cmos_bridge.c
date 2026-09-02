@@ -29,6 +29,7 @@
 
 static pthread_t g_sub_thread;
 static volatile sig_atomic_t g_pub_running = 0;
+static int g_sub_started = 0;
 
 static bool resolve_target_uid(uint8_t *out_uid);
 static int on_write(uint8_t uid, uint16_t addr, uint16_t val);
@@ -61,6 +62,7 @@ int inverter_cmos_bridge_start(void)
         return -1;
     }
 
+    g_sub_started = 1;
     LOG_INFO("[Inverter] subscriber started.");
     return 0;
 }
@@ -70,6 +72,11 @@ int inverter_cmos_bridge_start(void)
  */
 void inverter_cmos_bridge_stop(void)
 {
+    if (!g_sub_started) {
+        return;
+    }
+
+    g_sub_started = 0;
     pthread_cancel(g_sub_thread);
     pthread_join(g_sub_thread, NULL);
 

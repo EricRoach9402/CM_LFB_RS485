@@ -1,6 +1,6 @@
 # CM_LFB_RS485
 
-**Linux Modbus gateway** — Inverter (RTU) + UPS (RTU/TCP) → shared pool → CMOS / Alarm
+**Linux Modbus gateway** — Inverter (RTU/TCP) + UPS (RTU/TCP) → shared pool → CMOS / Alarm
 
 ```
 x86/cm_LFB   or   arm/cm_LFB
@@ -66,10 +66,10 @@ make ARCH=arm JSONC_ARM_LIB=... JSONC_ARM_INC=...   # custom SDK
 ```
 config.json
     ↓
-┌─────────────────┐     RS485 (bus_coord)     ┌──────────┐
-│ Inverter module │ ←────────────────────────→ │  Device  │
-│ UPS module      │ ←────────────────────────→ │  (Modbus)│
-└────────┬────────┘                           └──────────┘
+┌─────────────────┐   RS485 (bus_coord) / TCP   ┌──────────┐
+│ Inverter module │ ←──────────────────────────→ │  Device  │
+│ UPS module      │ ←──────────────────────────→ │  (Modbus)│
+└────────┬────────┘                             └──────────┘
          │ read/write
          ▼
    internal_pool[]  ←── devices/*/*_map.c
@@ -82,12 +82,18 @@ config.json
 
 | Module | Transport | Notes |
 |--------|-----------|-------|
-| **Inverter** | RTU only | FC03 poll, FC06/16 writes, HMI command queue; no TCP |
+| **Inverter** | RTU / TCP | FC03 poll, FC06/16 writes, HMI command queue |
 | **UPS** | RTU / TCP | FC03 poll (profile is all RO) |
 | **CMOS bridge** | IPC | parent: subscriber; child: publisher (fork) |
 | **Alarm** | pool watch | `ALARM_COND_CHANGE` on selected registers → SQLite |
 
+RTU units on the same serial `path` share a `bus_coord` mutex. TCP units use a dedicated socket per entry (no bus coordination).
+
+> **Inverter RTU vs TCP on connect:** RTU runs `init_inverter_reg()` (command source, baud, limits, stop, etc.). TCP connect only opens the socket — no register programming. If TCP control commands have no effect on site, check the inverter manual for Ethernet command-source settings.
+
 ### config example
+
+RTU:
 
 ```json
 {
@@ -104,23 +110,56 @@ config.json
 }
 ```
 
-```json
-"modbus_format": "TCP", "ip": "192.168.1.10", "port": 502
-```
+TCP (Inverter or UPS — `ip` and `port` are both required; there is no default port):
 
-> **Inverter: RTU only.** There is no TCP transport path in `inverter_module.c`; a TCP entry is not rejected at load time but will fail at runtime (empty serial `path`, reconnect loop). **UPS** supports RTU and TCP.
+```json
+{
+    "INVERTER": [{
+        "name": "Inverter#1", "enabled": true,
+        "modbus_format": "TCP", "modbus_uid": 1,
+        "ip": "192.168.1.10", "port": 502
+    }]
+}
+```
 
 ### config fields
 
 | Field | Used by daemon | Notes |
 |-------|----------------|-------|
-| `name`, `enabled`, `modbus_format`, `modbus_uid` | yes | |
-| `path`, `baud_rate` | yes (RTU) | Required for RTU; not validated at load time |
-| `ip`, `port` | yes (TCP, UPS only) | Required for TCP; not validated at load time |
-| `modbus_role`, `gpio` | parsed only | Stored in config; no runtime effect today |
-| `rtu_poll_interval_ms` | no | Fixed at 200 ms in `config_loader.c` |
+| `name`, `enabled`, `modbus_uid` | yes | Required for enabled entries (see validation below) |
+| `modbus_format` | yes | `"RTU"` or `"TCP"`; omitted → RTU |
+| `path`, `baud_rate` | yes (RTU) | Both required for RTU |
+| `ip`, `port` | yes (TCP) | Both required for TCP |
+| `modbus_role`, `gpio` | ignored | Accepted in JSON for compatibility; not loaded |
+
+Poll cycle interval (200 ms between full scan rounds) is `MODBUS_DEFAULT_POLL_CYCLE_INTERVAL_MS` in `include/modbus_defaults.h`.
 
 `enabled: false` entries are **skipped when config is loaded** — they are not kept in `global_config`. Toggling a unit requires editing `config.json` and restarting the daemon.
+
+### Load-time validation
+
+Each **enabled** INVERTER / UPS entry is validated in `config_loader.c` before any module thread starts. On failure the daemon logs `[config] ...` and exits immediately (same severity as a missing JSON file).
+
+| Check | RTU | TCP |
+|-------|-----|-----|
+| `name` | required, non-empty | required, non-empty |
+| `modbus_uid` | required, 1–247 | required, 1–247 |
+| `path` | required, non-empty | — |
+| `baud_rate` | required, 4800–115200 (step 100) | — |
+| `ip` | — | required, non-empty |
+| `port` | — | required, 1–65535 |
+| `modbus_format` | if present: `RTU` or `TCP` only | same |
+
+Error message format:
+
+| Situation | Message |
+|-----------|---------|
+| JSON key missing | `missing required field "field"` |
+| String present but empty | `empty value for "field"` |
+| Numeric out of range | `"field" out of range (min-max)` |
+| Value not allowed | `invalid "field" (expected ...)` |
+
+Example: `[config] INVERTER[0] 'Inverter#1': missing required field "port"`
 
 ---
 
@@ -130,7 +169,7 @@ config.json
 
 | Task | Where |
 |------|-------|
-| Rewire (UID / serial / baud) | `config/config.json` + restart |
+| Rewire (UID / serial / IP / port / baud) | `config/config.json` + restart |
 | Enable / disable a unit | `config/config.json` + restart (`enabled: false` omitted at load) |
 | Change register layout or CMOS keys | `devices/<dev>/*_map.c` (pool_address, description) |
 
@@ -170,11 +209,11 @@ Connect success does **not** set init flag automatically.
 | **CMOS key = map description** | renaming `description` in `*_map.c` changes the HMI subscription key |
 | **table sort order** | `device_address` must be ascending (binary search) |
 | **pool_address** | absolute values in `*_map.c` (e.g. `0xA000`, `0xA200`); not derived at runtime |
-| **shared RS485** | same `path` → `bus_coord` mutex (max **8** distinct paths); Modbus UIDs must be unique on a bus |
+| **shared RS485** | same `path` → `bus_coord` mutex (max **8** distinct paths); Modbus UIDs must be unique on a bus; TCP entries are independent |
 | **Alarm paths** | hardcoded in `*_alarm.c`, not configurable |
 | **Dual alarm systems** | internal SQLite (`alarm_bridge`) vs external `config/alarm_user_config.ini` (CMOS topic watch for HMI); daemon does **not** load the INI |
 | **Comm loss marker** | sustained read failure sets all profile pool slots to `0xFFFF` |
-| **Startup** | module / alarm / CMOS init errors are logged; daemon keeps running |
+| **Startup** | invalid enabled config → exit at load; CMOS pub / module / alarm init failure → cleanup and `EXIT_FAILURE` |
 | **lib/** | changes require separate approval |
 
 ### Layout
@@ -200,7 +239,7 @@ If multi-unit support is needed later:
 □ pick a new pool base (must not overlap existing profiles)
 □ devices/<name>/<name>_map.c   — copy table, update all pool_address values
 □ devices/<name>/<name>_map.h   — new profile
-□ config.json                   — new entry (uid / path / baud)
+□ config.json                   — new entry (uid / path / baud or ip / port)
 □ *_module.c                    — bind profile per unit (remove hardcoded *1_profile)
 □ *_cmos_bridge.c               — publish table + command routing per unit
 □ *_alarm.c                     — point each ctx read_data at the correct profile

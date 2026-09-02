@@ -10,16 +10,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "modbus_defines.h"
-
 #define CM_LFB_RS485_VERSION "0.0.1"
 #define MAX_INVERTER_COUNT 10
 #define MAX_UPS_COUNT 10
-
-/** Receive buffer size for module I/O. */
-#ifndef MODBUS_MAX_BUFFER_SIZE
-#define MODBUS_MAX_BUFFER_SIZE MODBUS_RTU_MAX_ADU_LENGTH
-#endif
 
 typedef enum {
     CONNECTION_DISCONNECTED = 0,
@@ -33,27 +26,21 @@ typedef enum {
 } modbus_format_t;
 
 /**
- * @brief Per-module runtime configuration.
+ * @brief Per-module configuration loaded from config.json.
  * RTU uses path/baud_rate; TCP uses ip/port (union storage).
+ * connection_state is updated at runtime and mirrored to the shared pool.
  */
 typedef struct {
     char name[64];
     bool enabled;
-    bool is_server;
-    int fd;
     int modbus_uid;
     modbus_format_t format;
     char path[256];
-    char gpio[16];
     union {
         struct { int baud_rate; };
         struct { char ip[64]; int port; };
     };
-    char modbus_role[16];
-    char recv_buffer[MODBUS_MAX_BUFFER_SIZE];
-    size_t recv_index;
     connection_state_t connection_state;
-    uint32_t rtu_poll_interval_ms;
 } module_config_t;
 
 typedef struct {

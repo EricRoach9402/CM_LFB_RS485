@@ -28,6 +28,7 @@
 
 static pthread_t g_sub_thread;
 static volatile sig_atomic_t g_pub_running = 0;
+static int g_sub_started = 0;
 
 static bool resolve_target_uid(uint8_t *out_uid);
 static void on_init_ups_cmd(const char *topic, const char *value);
@@ -52,6 +53,7 @@ int ups_cmos_bridge_start(void)
         return -1;
     }
 
+    g_sub_started = 1;
     LOG_INFO("[UPS] subscriber started.");
     return 0;
 }
@@ -61,6 +63,11 @@ int ups_cmos_bridge_start(void)
  */
 void ups_cmos_bridge_stop(void)
 {
+    if (!g_sub_started) {
+        return;
+    }
+
+    g_sub_started = 0;
     pthread_cancel(g_sub_thread);
     pthread_join(g_sub_thread, NULL);
 
