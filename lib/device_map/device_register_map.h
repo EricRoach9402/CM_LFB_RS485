@@ -162,7 +162,7 @@ void device_register_map_init(void);
 /**
  * @brief Write a unit's connection_state into the shared region.
  *
- * Call whenever cfg->connection_state is updated in the parent process.
+ * Call from the parent process when a unit connects or disconnects.
  */
 void shared_connection_state_set(const module_config_t *cfg,
                                    connection_state_t     state);

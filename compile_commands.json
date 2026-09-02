@@ -1,0 +1,112 @@
+[
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c src/main.c",
+    "file": "/home/eric/CM_LFB_RS485/src/main.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c src/config_loader.c",
+    "file": "/home/eric/CM_LFB_RS485/src/config_loader.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c src/bus_coord.c",
+    "file": "/home/eric/CM_LFB_RS485/src/bus_coord.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c src/inverter_module.c",
+    "file": "/home/eric/CM_LFB_RS485/src/inverter_module.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c src/inverter_cmos_bridge.c",
+    "file": "/home/eric/CM_LFB_RS485/src/inverter_cmos_bridge.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c src/inverter_alarm.c",
+    "file": "/home/eric/CM_LFB_RS485/src/inverter_alarm.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c src/alarm_manager.c",
+    "file": "/home/eric/CM_LFB_RS485/src/alarm_manager.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c devices/inverter/inverter_map.c",
+    "file": "/home/eric/CM_LFB_RS485/devices/inverter/inverter_map.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c src/ups_module.c",
+    "file": "/home/eric/CM_LFB_RS485/src/ups_module.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c src/ups_cmos_bridge.c",
+    "file": "/home/eric/CM_LFB_RS485/src/ups_cmos_bridge.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c src/ups_alarm.c",
+    "file": "/home/eric/CM_LFB_RS485/src/ups_alarm.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c devices/ups/ups_map.c",
+    "file": "/home/eric/CM_LFB_RS485/devices/ups/ups_map.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c lib/alarm/alarm_engine.c",
+    "file": "/home/eric/CM_LFB_RS485/lib/alarm/alarm_engine.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c lib/alarm/alarm_bridge.c",
+    "file": "/home/eric/CM_LFB_RS485/lib/alarm/alarm_bridge.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c lib/cmos/cmos_pub.c",
+    "file": "/home/eric/CM_LFB_RS485/lib/cmos/cmos_pub.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c lib/cmos/cmos_sub.c",
+    "file": "/home/eric/CM_LFB_RS485/lib/cmos/cmos_sub.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c lib/modbus/modbus_rtu_client.c",
+    "file": "/home/eric/CM_LFB_RS485/lib/modbus/modbus_rtu_client.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c lib/modbus/modbus_tcp.c",
+    "file": "/home/eric/CM_LFB_RS485/lib/modbus/modbus_tcp.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c lib/modbus/modbus_tcp_client.c",
+    "file": "/home/eric/CM_LFB_RS485/lib/modbus/modbus_tcp_client.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c lib/device_map/device_register_map.c",
+    "file": "/home/eric/CM_LFB_RS485/lib/device_map/device_register_map.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c lib/log/log.c",
+    "file": "/home/eric/CM_LFB_RS485/lib/log/log.c"
+  },
+  {
+    "directory": "/home/eric/CM_LFB_RS485",
+    "command": "gcc -Wall -Wextra -std=c11 -D_GNU_SOURCE -Iinclude -Idevices -Ilib/alarm -Ilib/cmos -Ilib/modbus -Ilib/device_map -Ilib/log -Ilib/sqlite3 -I/usr/include/json-c -O2 -c lib/sqlite3/sqlite3.c",
+    "file": "/home/eric/CM_LFB_RS485/lib/sqlite3/sqlite3.c"
+  }
+]

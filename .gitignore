@@ -12,4 +12,5 @@ x86/
 Thumbs.db
 
 .vscode/
+.cursor/
 .cursorrules

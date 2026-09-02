@@ -309,7 +309,7 @@ static void load_module_config(const char *family, int json_index,
         }
     }
 
-    /* RTU/TCP fields share union storage; parse by format only. */
+    /* RTU: path/baud_rate; TCP: ip/port — union storage, parse by format. */
     if (config->format == MODBUS_FORMAT_TCP) {
         if (json_object_object_get_ex(json_obj, "ip", &field)) {
             strncpy(config->ip, json_object_get_string(field),

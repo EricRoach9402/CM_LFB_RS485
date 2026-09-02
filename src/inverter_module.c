@@ -279,7 +279,6 @@ static int inverter_init_callback(module_config_t *cfg)
     }
 
     unit->comm_fail_count = 0;
-    cfg->connection_state = CONNECTION_CONNECTED;
     shared_connection_state_set(cfg, CONNECTION_CONNECTED);
 
     LOG_INFO("[Inverter] %s: connected.", cfg->name);
@@ -423,7 +422,6 @@ static int inverter_error_callback(module_config_t *cfg, int connection_state)
         unit->comm_fail_count = 0;
     }
 
-    cfg->connection_state = (connection_state_t)connection_state;
     shared_connection_state_set(cfg, (connection_state_t)connection_state);
 
     LOG_WARNING("[Inverter] %s: disconnected (state=%d). "

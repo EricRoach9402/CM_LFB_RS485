@@ -1,15 +1,5 @@
 CompileFlags:
+  CompilationDatabase: .
   Add:
     - -Wall
     - -Wextra
-    - -std=c11
-    - -D_GNU_SOURCE
-    - -I/home/eric/CM_LFB_RS485/include
-    - -I/home/eric/CM_LFB_RS485/devices
-    - -I/home/eric/CM_LFB_RS485/lib/alarm
-    - -I/home/eric/CM_LFB_RS485/lib/cmos
-    - -I/home/eric/CM_LFB_RS485/lib/modbus
-    - -I/home/eric/CM_LFB_RS485/lib/device_map
-    - -I/home/eric/CM_LFB_RS485/lib/log
-    - -I/home/eric/CM_LFB_RS485/lib/sqlite3
-

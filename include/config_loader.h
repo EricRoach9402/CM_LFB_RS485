@@ -27,20 +27,18 @@ typedef enum {
 
 /**
  * @brief Per-module configuration loaded from config.json.
- * RTU uses path/baud_rate; TCP uses ip/port (union storage).
- * connection_state is updated at runtime and mirrored to the shared pool.
+ * RTU and TCP transport fields share union storage (path/baud_rate vs ip/port).
+ * Runtime connection state lives in the shared pool (shared_connection_state_*).
  */
 typedef struct {
     char name[64];
     bool enabled;
     int modbus_uid;
     modbus_format_t format;
-    char path[256];
     union {
-        struct { int baud_rate; };
+        struct { char path[256]; int baud_rate; };
         struct { char ip[64]; int port; };
     };
-    connection_state_t connection_state;
 } module_config_t;
 
 typedef struct {
