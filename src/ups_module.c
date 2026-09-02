@@ -56,7 +56,6 @@ static int queue_push(ups_cmd_queue_t *q, uint16_t addr,
                       const uint16_t *values, uint16_t count,
                       ups_write_mode_t mode);
 static int queue_pop(ups_cmd_queue_t *q, ups_write_cmd_t *out);
-static ups_unit_t *ups_unit_from_config(const module_config_t *cfg);
 static ups_unit_t *ups_unit_from_uid(uint8_t uid);
 static void interruptible_sleep_ms(const ups_unit_t *unit, uint32_t duration_ms);
 static const char *ups_bus_path(const ups_unit_t *unit);
@@ -74,12 +73,12 @@ static int write_registers_to_device(ups_unit_t *unit,
                                      const uint16_t *values,
                                      uint16_t count,
                                      ups_write_mode_t mode);
-static int ups_init_callback(module_config_t *cfg);
-static int ups_process_callback(module_config_t *cfg);
+static int ups_init_callback(void *arg);
+static int ups_process_callback(void *arg);
 static int read_profile_to_pool(ups_unit_t *unit, bool track_comm_fail);
 static void run_init_sequence(ups_unit_t *unit);
-static int ups_error_callback(module_config_t *cfg, int connection_state);
-static int ups_msg_callback(module_config_t *cfg, uint16_t addr,
+static int ups_error_callback(void *arg, int connection_state);
+static int ups_msg_callback(void *arg, uint16_t addr,
                             uint16_t *values, size_t count);
 static void *ups_thread(void *arg);
 
@@ -255,19 +254,15 @@ int ups_init_request(uint8_t uid)
 
 /**
  * @brief init_callback – connect the unit transport.
- * @param cfg Module configuration.
+ * @param arg ups_unit_t pointer.
  * @return 0 on success, -1 on failure.
  */
-static int ups_init_callback(module_config_t *cfg)
+static int ups_init_callback(void *arg)
 {
-    if (!cfg) {
-        LOG_ERROR("[UPS] Invalid configuration.");
-        return -1;
-    }
+    ups_unit_t *unit = (ups_unit_t *)arg;
 
-    ups_unit_t *unit = ups_unit_from_config(cfg);
-    if (!unit) {
-        LOG_ERROR("[UPS] %s: unit not found.", cfg->name);
+    if (!unit || !unit->cfg) {
+        LOG_ERROR("[UPS] Invalid unit.");
         return -1;
     }
 
@@ -276,27 +271,25 @@ static int ups_init_callback(module_config_t *cfg)
     }
 
     unit->comm_fail_count = 0;
-    shared_connection_state_set(cfg, CONNECTION_CONNECTED);
+    shared_connection_state_set(unit->cfg, CONNECTION_CONNECTED);
 
-    LOG_INFO("[UPS] %s: connected.", cfg->name);
+    LOG_INFO("[UPS] %s: connected.", unit->cfg->name);
     return 0;
 }
 
 /**
  * @brief process_callback – drain queue, then read mapped registers.
- * @param cfg Module configuration.
+ * @param arg ups_unit_t pointer.
  * @return 0 on success, -1 on communication failure.
  */
-static int ups_process_callback(module_config_t *cfg)
+static int ups_process_callback(void *arg)
 {
-    if (!cfg) {
+    ups_unit_t *unit = (ups_unit_t *)arg;
+
+    if (!unit || !unit->cfg) {
         return -1;
     }
 
-    ups_unit_t *unit = ups_unit_from_config(cfg);
-    if (!unit) {
-        return -1;
-    }
     if (atomic_exchange(&unit->init_requested, false)) {
         run_init_sequence(unit);
     }
@@ -311,7 +304,7 @@ static int ups_process_callback(module_config_t *cfg)
                                        cmd.count, cmd.mode) != 0) {
                 LOG_WARNING("[UPS] %s: queued write to 0x%04X failed, "
                             "continuing scan.",
-                            cfg->name, cmd.addr);
+                            unit->cfg->name, cmd.addr);
             } else {
                 usleep(MODBUS_DEFAULT_INTER_SEGMENT_DELAY_US);
             }
@@ -423,57 +416,50 @@ static void run_init_sequence(ups_unit_t *unit)
 
 /**
  * @brief error_callback – disconnect and wait before reconnect.
- * @param cfg Module configuration.
+ * @param arg ups_unit_t pointer.
  * @param connection_state New connection state.
  * @return 0.
  */
-static int ups_error_callback(module_config_t *cfg, int connection_state)
+static int ups_error_callback(void *arg, int connection_state)
 {
-    if (!cfg) {
+    ups_unit_t *unit = (ups_unit_t *)arg;
+
+    if (!unit || !unit->cfg) {
         return 0;
     }
 
-    ups_unit_t *unit = ups_unit_from_config(cfg);
-    if (unit) {
-        unit_disconnect(unit);
-        unit->comm_fail_count = 0;
-    }
+    unit_disconnect(unit);
+    unit->comm_fail_count = 0;
 
-    shared_connection_state_set(cfg, (connection_state_t)connection_state);
+    shared_connection_state_set(unit->cfg, (connection_state_t)connection_state);
 
     LOG_WARNING("[UPS] %s: disconnected (state=%d). Retrying in %u ms …",
-                cfg->name, connection_state, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
+                unit->cfg->name, connection_state,
+                MODBUS_DEFAULT_RECONNECT_DELAY_MS);
 
-    if (unit) {
-        interruptible_sleep_ms(unit, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
-    } else {
-        usleep(MODBUS_DEFAULT_RECONNECT_DELAY_MS * 1000u);
-    }
+    interruptible_sleep_ms(unit, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
     return 0;
 }
 
 /**
  * @brief msg_callback – synchronous write path (unused; queue is preferred).
- * @param cfg Module configuration.
+ * @param arg ups_unit_t pointer.
  * @param addr Device register address.
  * @param values Values in host byte order.
  * @param count Register count.
  * @return 0 on success, -1 on failure.
  */
-static int ups_msg_callback(module_config_t *cfg,
-                     uint16_t addr, uint16_t *values, size_t count)
+static int ups_msg_callback(void *arg,
+                            uint16_t addr, uint16_t *values, size_t count)
 {
-    if (!cfg || !values || count == 0) {
+    ups_unit_t *unit = (ups_unit_t *)arg;
+
+    if (!unit || !unit->cfg || !values || count == 0) {
         return -1;
     }
 
-    ups_unit_t *unit = ups_unit_from_config(cfg);
-    if (!unit) {
-        LOG_ERROR("[UPS] %s: msg_callback – unit not found.", cfg->name);
-        return -1;
-    }
-
-    return write_registers_to_device(unit, addr, values, (uint16_t)count, UPS_WRITE_MODE_AUTO);
+    return write_registers_to_device(unit, addr, values, (uint16_t)count,
+                                     UPS_WRITE_MODE_AUTO);
 }
 
 /**
@@ -569,21 +555,6 @@ static int queue_pop(ups_cmd_queue_t *q, ups_write_cmd_t *out)
 
     pthread_mutex_unlock(&q->lock);
     return 0;
-}
-
-/**
- * @brief Find a running UPS unit by module config pointer.
- * @param cfg Module configuration pointer.
- * @return Unit pointer, or NULL if not found.
- */
-static ups_unit_t *ups_unit_from_config(const module_config_t *cfg)
-{
-    for (int i = 0; i < ups_unit_count; i++) {
-        if (ups_units[i].cfg == cfg) {
-            return &ups_units[i];
-        }
-    }
-    return NULL;
 }
 
 /**
@@ -853,15 +824,15 @@ static void *ups_thread(void *arg)
              cfg->name, unit->profile->name, cfg->modbus_uid);
 
     while (unit->running) {
-        if (unit->callbacks.init_callback(cfg) != 0) {
+        if (unit->callbacks.init_callback(unit) != 0) {
             LOG_ERROR("[UPS] %s: init failed, will retry.", cfg->name);
             interruptible_sleep_ms(unit, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
             continue;
         }
         while (unit->running) {
-            if (unit->callbacks.process_callback(cfg) != 0) {
+            if (unit->callbacks.process_callback(unit) != 0) {
                 if (unit->callbacks.error_callback) {
-                    unit->callbacks.error_callback(cfg, CONNECTION_DISCONNECTED);
+                    unit->callbacks.error_callback(unit, CONNECTION_DISCONNECTED);
                 }
                 break;
             }

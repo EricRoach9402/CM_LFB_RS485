@@ -57,7 +57,6 @@ static int queue_push(inverter_cmd_queue_t *q, uint16_t addr,
                       inverter_write_mode_t mode);
 static int queue_pop(inverter_cmd_queue_t *q, inverter_write_cmd_t *out);
 static void run_init_sequence(inverter_unit_t *unit);
-static inverter_unit_t *inverter_unit_from_config(const module_config_t *cfg);
 static inverter_unit_t *inverter_unit_from_uid(uint8_t uid);
 static void interruptible_sleep_ms(const inverter_unit_t *unit, uint32_t duration_ms);
 static const char *inverter_bus_path(const inverter_unit_t *unit);
@@ -78,10 +77,10 @@ static int write_registers_to_device(inverter_unit_t *unit,
 static int read_profile_to_pool(inverter_unit_t *unit, bool track_comm_fail);
 static bool inverter_baud_convert(uint32_t host_baud, uint16_t *out_reg);
 static void init_inverter_reg(inverter_unit_t *unit);
-static int inverter_init_callback(module_config_t *cfg);
-static int inverter_process_callback(module_config_t *cfg);
-static int inverter_error_callback(module_config_t *cfg, int connection_state);
-static int inverter_msg_callback(module_config_t *cfg, uint16_t addr,
+static int inverter_init_callback(void *arg);
+static int inverter_process_callback(void *arg);
+static int inverter_error_callback(void *arg, int connection_state);
+static int inverter_msg_callback(void *arg, uint16_t addr,
                                  uint16_t *values, size_t count);
 static void *inverter_thread(void *arg);
 
@@ -258,19 +257,15 @@ int inverter_init_request(uint8_t uid)
 
 /**
  * @brief init_callback – connect the unit transport.
- * @param cfg Module configuration.
+ * @param arg inverter_unit_t pointer.
  * @return 0 on success, -1 on failure.
  */
-static int inverter_init_callback(module_config_t *cfg)
+static int inverter_init_callback(void *arg)
 {
-    if (!cfg) {
-        LOG_ERROR("[Inverter] Invalid configuration.");
-        return -1;
-    }
+    inverter_unit_t *unit = (inverter_unit_t *)arg;
 
-    inverter_unit_t *unit = inverter_unit_from_config(cfg);
-    if (!unit) {
-        LOG_ERROR("[Inverter] %s: unit not found.", cfg->name);
+    if (!unit || !unit->cfg) {
+        LOG_ERROR("[Inverter] Invalid unit.");
         return -1;
     }
 
@@ -279,27 +274,25 @@ static int inverter_init_callback(module_config_t *cfg)
     }
 
     unit->comm_fail_count = 0;
-    shared_connection_state_set(cfg, CONNECTION_CONNECTED);
+    shared_connection_state_set(unit->cfg, CONNECTION_CONNECTED);
 
-    LOG_INFO("[Inverter] %s: connected.", cfg->name);
+    LOG_INFO("[Inverter] %s: connected.", unit->cfg->name);
     return 0;
 }
 
 /**
  * @brief process_callback – drain queue, then read mapped registers.
- * @param cfg Module configuration.
+ * @param arg inverter_unit_t pointer.
  * @return 0 on success, -1 on communication failure.
  */
-static int inverter_process_callback(module_config_t *cfg)
+static int inverter_process_callback(void *arg)
 {
-    if (!cfg) {
+    inverter_unit_t *unit = (inverter_unit_t *)arg;
+
+    if (!unit || !unit->cfg) {
         return -1;
     }
 
-    inverter_unit_t *unit = inverter_unit_from_config(cfg);
-    if (!unit) {
-        return -1;
-    }
     if (atomic_exchange(&unit->init_requested, false)) {
         run_init_sequence(unit);
     }
@@ -313,7 +306,7 @@ static int inverter_process_callback(module_config_t *cfg)
             if (write_registers_locked(unit, cmd.addr, cmd.values,
                                        cmd.count, cmd.mode) != 0) {
                 LOG_WARNING("[Inverter] %s: queued write to 0x%04X failed, "
-                            "continuing scan.", cfg->name, cmd.addr);
+                            "continuing scan.", unit->cfg->name, cmd.addr);
             } else {
                 usleep(MODBUS_DEFAULT_INTER_SEGMENT_DELAY_US);
             }
@@ -406,55 +399,46 @@ static int read_profile_to_pool(inverter_unit_t *unit, bool track_comm_fail)
 
 /**
  * @brief error_callback – disconnect and wait before reconnect.
- * @param cfg Module configuration.
+ * @param arg inverter_unit_t pointer.
  * @param connection_state New connection state.
  * @return 0.
  */
-static int inverter_error_callback(module_config_t *cfg, int connection_state)
+static int inverter_error_callback(void *arg, int connection_state)
 {
-    if (!cfg) {
+    inverter_unit_t *unit = (inverter_unit_t *)arg;
+
+    if (!unit || !unit->cfg) {
         return 0;
     }
 
-    inverter_unit_t *unit = inverter_unit_from_config(cfg);
-    if (unit) {
-        unit_disconnect(unit);
-        unit->comm_fail_count = 0;
-    }
+    unit_disconnect(unit);
+    unit->comm_fail_count = 0;
 
-    shared_connection_state_set(cfg, (connection_state_t)connection_state);
+    shared_connection_state_set(unit->cfg, (connection_state_t)connection_state);
 
     LOG_WARNING("[Inverter] %s: disconnected (state=%d). "
                 "Retrying in %u ms …",
-                cfg->name, connection_state, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
+                unit->cfg->name, connection_state,
+                MODBUS_DEFAULT_RECONNECT_DELAY_MS);
 
-    if (unit) {
-        interruptible_sleep_ms(unit, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
-    } else {
-        usleep(MODBUS_DEFAULT_RECONNECT_DELAY_MS * 1000u);
-    }
+    interruptible_sleep_ms(unit, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
     return 0;
 }
 
 /**
  * @brief msg_callback – synchronous write path (unused; queue is preferred).
- * @param cfg Module configuration.
+ * @param arg inverter_unit_t pointer.
  * @param addr Device register address.
  * @param values Values in host byte order.
  * @param count Register count.
  * @return 0 on success, -1 on failure.
  */
-static int inverter_msg_callback(module_config_t *cfg,
+static int inverter_msg_callback(void *arg,
                                  uint16_t addr, uint16_t *values, size_t count)
 {
-    if (!cfg || !values || count == 0) {
-        return -1;
-    }
+    inverter_unit_t *unit = (inverter_unit_t *)arg;
 
-    inverter_unit_t *unit = inverter_unit_from_config(cfg);
-    if (!unit) {
-        LOG_ERROR("[Inverter] %s: msg_callback – unit not found.",
-                  cfg->name);
+    if (!unit || !unit->cfg || !values || count == 0) {
         return -1;
     }
 
@@ -603,21 +587,6 @@ static void run_init_sequence(inverter_unit_t *unit)
 
     pool_write_register(int_inverter_init_flag_reg, 1);
     LOG_INFO("[Inverter] %s: init sequence complete.", unit->cfg->name);
-}
-
-/**
- * @brief Find a running Inverter unit by module config pointer.
- * @param cfg Module configuration pointer.
- * @return Unit pointer, or NULL if not found.
- */
-static inverter_unit_t *inverter_unit_from_config(const module_config_t *cfg)
-{
-    for (int i = 0; i < inverter_unit_count; i++) {
-        if (inverter_units[i].cfg == cfg) {
-            return &inverter_units[i];
-        }
-    }
-    return NULL;
 }
 
 /**
@@ -904,15 +873,16 @@ static void *inverter_thread(void *arg)
              cfg->name, unit->profile->name, cfg->modbus_uid);
 
     while (unit->running) {
-        if (unit->callbacks.init_callback(cfg) != 0) {
+        if (unit->callbacks.init_callback(unit) != 0) {
             LOG_ERROR("[Inverter] %s: init failed, will retry.", cfg->name);
             interruptible_sleep_ms(unit, MODBUS_DEFAULT_RECONNECT_DELAY_MS);
             continue;
         }
         while (unit->running) {
-            if (unit->callbacks.process_callback(cfg) != 0) {
+            if (unit->callbacks.process_callback(unit) != 0) {
                 if (unit->callbacks.error_callback) {
-                    unit->callbacks.error_callback(cfg, CONNECTION_DISCONNECTED);
+                    unit->callbacks.error_callback(unit,
+                                                   CONNECTION_DISCONNECTED);
                 }
                 break;
             }

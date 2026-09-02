@@ -77,6 +77,21 @@
  */
 #define DEVICE_REGISTER_MAP_MAX_PROFILES 32
 
+/* ── Connection state (process-shared) ──────────────────────────────── */
+
+/**
+ * @brief Per-unit Modbus transport connection state in the shared pool.
+ *
+ * Updated by device modules in the parent process via shared_connection_state_set().
+ * Read by forked CMOS publishers and other cross-process consumers via
+ * shared_connection_state_get().
+ */
+typedef enum {
+    CONNECTION_DISCONNECTED = 0,
+    CONNECTION_CONNECTED = 1,
+    CONNECTION_UNKNOWN = 99
+} connection_state_t;
+
 /* ── Access permission ────────────────────────────────────────────────── */
 
 /**

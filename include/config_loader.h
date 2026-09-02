@@ -15,12 +15,6 @@
 #define MAX_UPS_COUNT 10
 
 typedef enum {
-    CONNECTION_DISCONNECTED = 0,
-    CONNECTION_CONNECTED = 1,
-    CONNECTION_UNKNOWN = 99
-} connection_state_t;
-
-typedef enum {
     MODBUS_FORMAT_RTU,
     MODBUS_FORMAT_TCP,
 } modbus_format_t;
@@ -28,7 +22,6 @@ typedef enum {
 /**
  * @brief Per-module configuration loaded from config.json.
  * RTU and TCP transport fields share union storage (path/baud_rate vs ip/port).
- * Runtime connection state lives in the shared pool (shared_connection_state_*).
  */
 typedef struct {
     char name[64];
@@ -51,13 +44,13 @@ typedef struct {
 extern system_config_t global_config;
 extern char global_config_path[256];
 
-/** Module callback table used by polling threads. */
+/** Module callback table used by polling threads. @a unit is module runtime state. */
 typedef struct {
-    int (*init_callback)(module_config_t *config);
-    int (*start_callback)(const module_config_t *config);
-    int (*process_callback)(module_config_t *config);
-    int (*error_callback)(module_config_t *config, int connection_state);
-    int (*msg_callback)(module_config_t *config, uint16_t addr,
+    int (*init_callback)(void *unit);
+    int (*start_callback)(const void *unit);
+    int (*process_callback)(void *unit);
+    int (*error_callback)(void *unit, int connection_state);
+    int (*msg_callback)(void *unit, uint16_t addr,
                         uint16_t *values, size_t count);
 } module_callbacks_t;
 
