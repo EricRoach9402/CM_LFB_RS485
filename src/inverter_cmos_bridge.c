@@ -240,7 +240,10 @@ static void on_main_pump_duty_cmd(const char *topic, const char *value)
     LOG_VERBOSE("[Inverter] SUB topic='%s' key='main_pump' value='%s'",
                 topic ? topic : NULL, value ? value : "");
 
-    uint16_t duty_val = (uint16_t)strtoul(value, NULL, 0);
+    //uint16_t duty_val = (uint16_t)strtoul(value, NULL, 0);
+    float raw_duty_val = strtof(value, NULL);
+
+    uint16_t duty_val = (uint16_t)(raw_duty_val * 100u);
 
     uint16_t frequency_val = duty_convert_frequency(duty_val);
 
@@ -510,12 +513,16 @@ static uint16_t duty_convert_frequency(uint16_t duty)
         return lower;
     }
 
-    if (duty >= 100) {
+    if (duty >= 10000) {
         return upper;
     }
 
+    uint16_t duty_percent = duty / 100u;
+    uint16_t duty_remainder = duty % 100u;  
+
     return (uint16_t)(lower
-                      + ((uint32_t)(upper - lower) * duty) / 100u);
+                      + ((uint32_t)(upper - lower) * duty_percent) / 100u
+                      + ((uint32_t)(upper - lower) * duty_remainder) / 10000u);
 }
 
 /**
@@ -540,12 +547,12 @@ static uint16_t frequency_convert_duty(uint16_t frequency)
     }
 
     if (frequency >= upper) {
-        return 100;
+        return 10000;
     }
 
     uint32_t range = (uint32_t)(upper - lower);
     uint32_t delta = (uint32_t)(frequency - lower);
-    return (uint16_t)((delta * 100u + range / 2u) / range);
+    return (uint16_t)((delta * 10000u + range / 2u) / range);
 }
 
 /**
@@ -558,13 +565,16 @@ static void publish_frequency_cmd_duty(const module_config_t *cfg)
 
     pool_read_register(int_frequency_write_cmd_reg, &frequency_cmd);
     uint16_t duty_frequency_cmd = frequency_convert_duty(frequency_cmd);
+
+    float duty_frequency_cmd_float = (float)duty_frequency_cmd / 100.0f;
+
     const char *state =
         (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
             ? "alive"
             : "disconnect";
 
     char val_str[8];
-    snprintf(val_str, sizeof(val_str), "%u", duty_frequency_cmd);
+    snprintf(val_str, sizeof(val_str), "%.2f", duty_frequency_cmd_float);
 
     cmos_publish(state, NULL, "duty_command", val_str);
     LOG_VERBOSE("[Inverter] PUB topic='%s' state='%s' type='%s' key='%s' value='%s'",
@@ -587,13 +597,15 @@ static void publish_frequency_out_duty(const module_config_t *cfg)
 
     uint16_t duty_frequency_out = frequency_convert_duty(frequency_out);
 
+    float duty_frequency_out_float = (float)duty_frequency_out / 100.0f;
+
     const char *state =
         (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
             ? "alive"
             : "disconnect";
 
     char val_str[8];
-    snprintf(val_str, sizeof(val_str), "%u", duty_frequency_out);
+    snprintf(val_str, sizeof(val_str), "%.2f", duty_frequency_out_float);
 
     cmos_publish(state, NULL, "output_duty", val_str);
     LOG_VERBOSE("[Inverter] PUB topic='%s' state='%s' type='%s' key='%s' value='%s'",
