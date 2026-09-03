@@ -62,7 +62,7 @@ static void interruptible_sleep_ms(const inverter_unit_t *unit, uint32_t duratio
 static const char *inverter_bus_path(const inverter_unit_t *unit);
 static int unit_connect(inverter_unit_t *unit);
 static void unit_disconnect(inverter_unit_t *unit);
-static int unit_read_holding_registers(inverter_unit_t *unit, uint16_t addr,
+static int read_device_value(inverter_unit_t *unit, uint16_t addr,
                                        uint16_t count, uint16_t *out);
 static int write_registers_locked(inverter_unit_t *unit,
                                   uint16_t addr,
@@ -296,6 +296,7 @@ static int inverter_process_callback(void *arg)
     if (atomic_exchange(&unit->init_requested, false)) {
         run_init_sequence(unit);
     }
+
     inverter_write_cmd_t cmd;
     if (queue_pop(&unit->cmd_queue, &cmd) == 0) {
         const char *path = inverter_bus_path(unit);
@@ -361,7 +362,7 @@ static int read_profile_to_pool(inverter_unit_t *unit, bool track_comm_fail)
         uint16_t start = profile->table[seg_start].device_address;
         uint16_t count = (uint16_t)seg_len;
 
-        int result = unit_read_holding_registers(unit, start, count, buf);
+        int result = read_device_value(unit, start, count, buf);
 
         if (result != 0) {
             if (!track_comm_fail) {
@@ -728,7 +729,7 @@ static void unit_disconnect(inverter_unit_t *unit)
  * @param out Output buffer.
  * @return 0 on success, or a transport/Modbus error code.
  */
-static int unit_read_holding_registers(inverter_unit_t *unit, uint16_t addr,
+static int read_device_value(inverter_unit_t *unit, uint16_t addr,
                                        uint16_t count, uint16_t *out)
 {
     if (unit->cfg->format == MODBUS_FORMAT_TCP) {

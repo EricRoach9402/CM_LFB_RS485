@@ -61,7 +61,7 @@ static void interruptible_sleep_ms(const ups_unit_t *unit, uint32_t duration_ms)
 static const char *ups_bus_path(const ups_unit_t *unit);
 static int unit_connect(ups_unit_t *unit);
 static void unit_disconnect(ups_unit_t *unit);
-static int unit_read_holding_registers(ups_unit_t *unit, uint16_t addr,
+static int read_device_value(ups_unit_t *unit, uint16_t addr,
                                        uint16_t count, uint16_t *out);
 static int write_registers_locked(ups_unit_t *unit,
                                   uint16_t addr,
@@ -359,7 +359,7 @@ static int read_profile_to_pool(ups_unit_t *unit, bool track_comm_fail)
         uint16_t start = profile->table[seg_start].device_address;
         uint16_t count = (uint16_t)seg_len;
 
-        int result = unit_read_holding_registers(unit, start, count, buf);
+        int result = read_device_value(unit, start, count, buf);
 
         if (result != 0) {
             if (!track_comm_fail) {
@@ -691,7 +691,7 @@ static void unit_disconnect(ups_unit_t *unit)
  * @param out Output buffer.
  * @return 0 on success, or a transport/Modbus error code.
  */
-static int unit_read_holding_registers(ups_unit_t *unit, uint16_t addr,
+static int read_device_value(ups_unit_t *unit, uint16_t addr,
                                        uint16_t count, uint16_t *out)
 {
     if (unit->cfg->format == MODBUS_FORMAT_TCP) {
