@@ -8,6 +8,7 @@
 #include <netinet/tcp.h>
 #include <signal.h>
 
+#define VERSION        "0.1.1"
 #define CM_MAX_SUB_CLIENT  256 // publisher 最多同時連線的 subscriber 數量，超過就拒絕新連線
 
 static int master_sock = -1;

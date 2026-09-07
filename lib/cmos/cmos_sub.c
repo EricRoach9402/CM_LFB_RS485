@@ -10,6 +10,7 @@
 #include <netinet/tcp.h>
 #include <signal.h>
 
+#define VERSION        "0.1.1"
 #define CM_RX_BUF        2048 // 接收緩衝區大小，必須足夠大以容納 publisher 發來的訊息，否則可能會被截斷
 #define CM_LINE_BUF      1024 // 單行命令緩衝區大小，從 rxbuf 切出的單行最大長度
 #define CM_MAX_PUB_CONN  256 // 訂閱者最多同時連線的 publisher 數量，超過就拒絕新連線
@@ -86,11 +87,11 @@ static int send_line(int sock, const char *line) // 發送一行文字給 socket
 }
 
 /* 設定 master socket 的接收超時，避免 ctx_lookup_slot 的 recv 永久阻塞 */
-static void set_recv_timeout(int sock, int seconds)
+static void set_recv_timeout(int sock, int ms)
 {
     struct timeval tv;
-    tv.tv_sec  = seconds;
-    tv.tv_usec = 0;
+    tv.tv_sec  = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 }
 
@@ -204,7 +205,7 @@ static int ctx_reconnect_master(struct cmos_sub_ctx *ctx) // 重新連接到 mas
     if (ctx->master_sock >= 0) { close(ctx->master_sock); ctx->master_sock = -1; }
     ctx->master_sock = connect_tcp(ctx->master_ip, ctx->master_port);
     if (ctx->master_sock < 0) return -1;
-    set_recv_timeout(ctx->master_sock, 3); /* 問題四修正：避免 recv 永久阻塞 */
+    set_recv_timeout(ctx->master_sock, 500); /* 問題四修正：避免 recv 永久阻塞 */
 
     char buf[256]; // 重新註冊 node name 和訂閱的 topic，確保 master 知道這個訂閱者的存在和訂閱的 topic，讓 master 能夠正確地把 publisher 的資訊發給這個訂閱者
     snprintf(buf, sizeof(buf), "NODE %s\n", ctx->node_name);
@@ -355,7 +356,7 @@ cmos_sub_ctx_t *cmos_sub_create(const char *master_ip, int master_port,
 
     ctx->master_sock = connect_tcp(master_ip, master_port); // 連接到 master，成功回傳 socket fd，失敗回傳 -1
     if (ctx->master_sock < 0) { free(ctx); return NULL; } // 連接失敗
-    set_recv_timeout(ctx->master_sock, 3); /* 問題四修正：避免 ctx_lookup_slot recv 永久阻塞 */
+    set_recv_timeout(ctx->master_sock, 500); /* 問題四修正：避免 ctx_lookup_slot recv 永久阻塞 */
 
     char buf[256]; // 向 master 註冊 node name，格式是 NODE node_name\n，如果發送失敗就關閉 socket 並釋放 context 後回傳 NULL
     snprintf(buf, sizeof(buf), "NODE %s\n", node_name); // 將註冊命令格式化到 buf 中
@@ -418,21 +419,21 @@ int cmos_sub_add(cmos_sub_ctx_t *ctx,
 void cmos_sub_spin_ctx(cmos_sub_ctx_t *ctx) // 進入 spin loop，持續監聽 publisher 的訊息，並處理連線和斷線事件，當 publisher 發來訊息時會呼叫對應訂閱槽的 callback
 {
     printf("[%s] spinning\n", ctx->node_name);
-    time_t last_reconnect = 0; /* 問題一修正：用時間戳獨立控制補連週期 */
+    struct timespec last_reconnect = {0, 0}; /* ms 精度補連計時 */
 
     while (1) {
         if (ctx_active_count(ctx) == 0) ctx_reconnect_all_pubs(ctx);
 
         /* 完全沒有連線：sleep 後重試 */
         if (ctx_active_count(ctx) == 0) {
-            sleep(2);
+            usleep(500 * 1000);
             ctx_reconnect_all_pubs(ctx);
             continue;
         }
 
-        /* timeout 2000ms */
+        /* timeout 500ms */
         struct epoll_event events[CM_MAX_PUB_CONN];
-        int r = epoll_wait(ctx->epfd, events, CM_MAX_PUB_CONN, 2000);
+        int r = epoll_wait(ctx->epfd, events, CM_MAX_PUB_CONN, 500);
 
         /*
          * 問題一修正：不再依賴 r==0 判斷。
@@ -440,8 +441,11 @@ void cmos_sub_spin_ctx(cmos_sub_ctx_t *ctx) // 進入 spin loop，持續監聽 p
          * 問題二/三修正：ctx_lookup_slot 內部 recv 已設 SO_RCVTIMEO=3s，
          * 不會永久阻塞；最多凍住 slot_count × 3 秒，不再無限掛住。
          */
-        time_t now = time(NULL);
-        if (now - last_reconnect >= 2) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long elapsed_ms = (now.tv_sec  - last_reconnect.tv_sec)  * 1000
+                        + (now.tv_nsec - last_reconnect.tv_nsec) / 1000000;
+        if (elapsed_ms >= 500) {
             last_reconnect = now;
 
             /*
