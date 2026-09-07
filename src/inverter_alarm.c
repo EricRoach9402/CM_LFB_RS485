@@ -23,8 +23,8 @@ static void forward_to_manager(const alarm_entry_t *entry,
                                void *userdata);
 
 static const alarm_manager_sink_t inverter_alarm_sink = {
-    .log_dir = "/home/cm/LFB_Feeder_Kit/Logs/inverter_alarm",
-    .log_path = "/home/cm/LFB_Feeder_Kit/Logs/inverter_alarm/alarms.db",
+    .log_dir = "/home/cm/LFB_Feeder_Kit/Logs/LFB_Inverter",
+    .log_path = "/home/cm/LFB_Feeder_Kit/Logs/LFB_Inverter/alarms.db",
     .log_node = "inverter_alarm_node",
 };
 

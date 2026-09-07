@@ -7,7 +7,6 @@
 #define ALARM_MANAGER_H
 
 #include "alarm_engine.h"
-#include "config_loader.h"
 
 /** Per-source SQLite log identity supplied by alarm modules. */
 typedef struct alarm_manager_sink {

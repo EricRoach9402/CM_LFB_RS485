@@ -23,8 +23,8 @@ static void forward_to_manager(const alarm_entry_t *entry,
                                void *userdata);
 
 static const alarm_manager_sink_t ups_alarm_sink = {
-    .log_dir = "/home/cm/LFB_Feeder_Kit/Logs/ups_alarm",
-    .log_path = "/home/cm/LFB_Feeder_Kit/Logs/ups_alarm/alarms.db",
+    .log_dir = "/home/cm/LFB_Feeder_Kit/Logs/LFB_UPS",
+    .log_path = "/home/cm/LFB_Feeder_Kit/Logs/LFB_UPS/alarms.db",
     .log_node = "ups_alarm_node",
 };
 
