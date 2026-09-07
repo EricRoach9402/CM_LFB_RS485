@@ -63,7 +63,6 @@
 #include <stdbool.h>
 
 #include "modbus_defines.h"
-#include "config_loader.h"
 
 /**
  * @brief Total addressable registers in the shared internal pool.
@@ -76,21 +75,6 @@
  * device_register_map_register_profile()'s collision checker.
  */
 #define DEVICE_REGISTER_MAP_MAX_PROFILES 32
-
-/* ── Connection state (process-shared) ──────────────────────────────── */
-
-/**
- * @brief Per-unit Modbus transport connection state in the shared pool.
- *
- * Updated by device modules in the parent process via shared_connection_state_set().
- * Read by forked CMOS publishers and other cross-process consumers via
- * shared_connection_state_get().
- */
-typedef enum {
-    CONNECTION_DISCONNECTED = 0,
-    CONNECTION_CONNECTED = 1,
-    CONNECTION_UNKNOWN = 99
-} connection_state_t;
 
 /* ── Access permission ────────────────────────────────────────────────── */
 
@@ -173,20 +157,6 @@ extern pthread_rwlock_t *internal_pool_lock;
  * created.
  */
 void device_register_map_init(void);
-
-/**
- * @brief Write a unit's connection_state into the shared region.
- *
- * Call from the parent process when a unit connects or disconnects.
- */
-void shared_connection_state_set(const module_config_t *cfg,
-                                   connection_state_t     state);
-
-/**
- * @brief Read a unit's connection_state from the shared region.
- * @return CONNECTION_DISCONNECTED if cfg has no registered slot.
- */
-connection_state_t shared_connection_state_get(const module_config_t *cfg);
 
 /* ── Startup pool-address collision check ─────────────────────────────── */
 

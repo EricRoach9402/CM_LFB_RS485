@@ -22,6 +22,9 @@
 #include "ups/ups_map.h"
 #include "ups_cmos_bridge.h"
 
+#define CONNECTION_DISCONNECTED 0
+#define CONNECTION_CONNECTED 1
+
 typedef struct {
     uint16_t addr;
     uint16_t values[MODBUS_MAX_WRITE_REGISTERS];
@@ -46,10 +49,12 @@ typedef struct {
     pthread_t thread;
     volatile sig_atomic_t running;
     int comm_fail_count;
+    int connection_state;
     ups_cmd_queue_t cmd_queue;
     atomic_bool init_requested;
 } ups_unit_t;
 
+static void unit_set_connection(ups_unit_t *unit, int state);
 static void queue_init(ups_cmd_queue_t *q);
 static void queue_destroy(ups_cmd_queue_t *q);
 static int queue_push(ups_cmd_queue_t *q, uint16_t addr,
@@ -119,11 +124,14 @@ int start_ups_modules(module_config_t ups[], int ups_count)
         unit->profile = profile;
         unit->running = 1;
         unit->comm_fail_count = 0;
+        unit->connection_state = CONNECTION_DISCONNECTED;
         memset(&unit->tcp_ctx, 0, sizeof(unit->tcp_ctx));
         memset(&unit->rtu_ctx, 0, sizeof(unit->rtu_ctx));
         unit->rtu_ctx.fd = -1;
         queue_init(&unit->cmd_queue);
         atomic_init(&unit->init_requested, false);
+        pool_write_register(int_ups_connection_status_reg,
+                            CONNECTION_DISCONNECTED);
 
         unit->callbacks.init_callback = ups_init_callback;
         unit->callbacks.process_callback = ups_process_callback;
@@ -271,7 +279,7 @@ static int ups_init_callback(void *arg)
     }
 
     unit->comm_fail_count = 0;
-    shared_connection_state_set(unit->cfg, CONNECTION_CONNECTED);
+    unit_set_connection(unit, CONNECTION_CONNECTED);
 
     LOG_INFO("[UPS] %s: connected.", unit->cfg->name);
     return 0;
@@ -431,7 +439,7 @@ static int ups_error_callback(void *arg, int connection_state)
     unit_disconnect(unit);
     unit->comm_fail_count = 0;
 
-    shared_connection_state_set(unit->cfg, (connection_state_t)connection_state);
+    unit_set_connection(unit, connection_state);
 
     LOG_WARNING("[UPS] %s: disconnected (state=%d). Retrying in %u ms …",
                 unit->cfg->name, connection_state,
@@ -602,6 +610,21 @@ static const char *ups_bus_path(const ups_unit_t *unit)
         return NULL;
     }
     return unit->cfg->path;
+}
+
+/**
+ * @brief Update unit connection state and mirror it to the shared pool.
+ * @param unit Target unit.
+ * @param state CONNECTION_CONNECTED or CONNECTION_DISCONNECTED.
+ */
+static void unit_set_connection(ups_unit_t *unit, int state)
+{
+    if (!unit) {
+        return;
+    }
+
+    unit->connection_state = state;
+    pool_write_register(int_ups_connection_status_reg, (uint16_t)state);
 }
 
 /**

@@ -20,10 +20,8 @@
 /* ── Internal pool (process-shared) ───────────────────────────────────── */
 
 typedef struct {
-    pthread_rwlock_t   lock;
-    uint16_t           pool[INTERNAL_POOL_SIZE];
-    connection_state_t inverter_conn[MAX_INVERTER_COUNT];
-    connection_state_t ups_conn[MAX_UPS_COUNT];
+    pthread_rwlock_t lock;
+    uint16_t pool[INTERNAL_POOL_SIZE];
 } shared_pool_region_t;
 
 static shared_pool_region_t *g_shared_pool_region = NULL;
@@ -68,47 +66,6 @@ void device_register_map_init(void)
     }
 
     registered_profile_count = 0;
-}
-
-/* ── Connection state (process-shared) ────────────────────────────────── */
-
-static connection_state_t *shared_conn_slot_for(const module_config_t *cfg)
-{
-    if (!cfg || !g_shared_pool_region) {
-        return NULL;
-    }
-
-    for (int i = 0; i < global_config.inverter_count; i++) {
-        if (&global_config.inverter[i] == cfg) {
-            return &g_shared_pool_region->inverter_conn[i];
-        }
-    }
-
-    for (int i = 0; i < global_config.ups_count; i++) {
-        if (&global_config.ups[i] == cfg) {
-            return &g_shared_pool_region->ups_conn[i];
-        }
-    }
-
-    return NULL;
-}
-
-void shared_connection_state_set(const module_config_t *cfg,
-                                   connection_state_t     state)
-{
-    connection_state_t *slot = shared_conn_slot_for(cfg);
-    if (slot) {
-        *slot = state;
-    }
-}
-
-connection_state_t shared_connection_state_get(const module_config_t *cfg)
-{
-    connection_state_t *slot = shared_conn_slot_for(cfg);
-    if (!slot) {
-        return CONNECTION_DISCONNECTED;
-    }
-    return *slot;
 }
 
 /* ── Startup pool-address collision check ─────────────────────────────── */

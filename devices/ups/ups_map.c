@@ -68,6 +68,7 @@ const device_map_profile_t ups1_profile = {
 };
 
 const uint16_t int_ups_init_flag_reg = 0xA2F0;
+const uint16_t int_ups_connection_status_reg = 0xA2F1;
 
 /**
  * @brief Return true when queued writes to addr may be merged.

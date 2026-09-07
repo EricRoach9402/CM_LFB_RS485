@@ -48,6 +48,8 @@ extern const uint16_t int_pid_feedback_value_reg;
 
 /* 0 = init pending, 1 = init complete (software pool slot). */
 extern const uint16_t int_inverter_init_flag_reg;
+/* 0 = disconnected, 1 = connected (software pool slot). */
+extern const uint16_t int_inverter_connection_status_reg;
 
 extern const uint16_t dev_frequency_cmd_source_reg;
 extern const uint16_t dev_run_cmd_source_reg;

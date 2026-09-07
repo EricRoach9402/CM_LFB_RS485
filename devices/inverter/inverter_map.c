@@ -55,6 +55,7 @@ const device_map_profile_t inverter1_profile = {
     .read_chunk = 20,
 };
 
+// Internal register addresses
 const uint16_t int_frequency_cmd_source_reg = 0xA100;
 const uint16_t int_run_cmd_source_reg = 0xA101;
 
@@ -85,8 +86,11 @@ const uint16_t int_dc_bus_voltage_reg = 0xA007;
 const uint16_t int_motor_actual_speed_reg = 0xA008;
 const uint16_t int_pid_feedback_value_reg = 0xA009;
 
+// Custom register addresses
 const uint16_t int_inverter_init_flag_reg = 0xA0F0;
+const uint16_t int_inverter_connection_status_reg = 0xA0F1;
 
+// Device register addresses
 const uint16_t dev_frequency_cmd_source_reg = 0x0014;
 const uint16_t dev_run_cmd_source_reg = 0x0015;
 

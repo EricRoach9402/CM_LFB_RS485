@@ -11,6 +11,8 @@
 extern const device_map_profile_t ups1_profile;
 
 extern const uint16_t int_ups_init_flag_reg;
+/* 0 = disconnected, 1 = connected (software pool slot). */
+extern const uint16_t int_ups_connection_status_reg;
 
 /**
  * @brief Return true when queued writes to addr may be merged.

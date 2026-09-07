@@ -41,6 +41,7 @@ static void publish_pool_register(const module_config_t *cfg,
 static void publish_all_pool_register(const module_config_t *cfg);
 static void publish_additional_item(const module_config_t *cfg);
 static void pub_signal_handler(int sig);
+static const char *connection_pub_state(void);
 
 /**
  * @brief Start the CMOS subscriber thread in the parent process.
@@ -210,11 +211,8 @@ static void publish_pool_register(const module_config_t *cfg,
                                   uint16_t pool_address)
 {
     uint16_t val = 0;
-
-    const char *state =
-        (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
-            ? "alive"
-            : "disconnect";
+    (void)cfg;
+    const char *state = connection_pub_state();
 
     if (!pool_read_register(pool_address, &val)) {
         LOG_WARNING("[UPS] publish_pool_register: "
@@ -273,4 +271,19 @@ static void pub_signal_handler(int sig)
 {
     (void)sig;
     g_pub_running = 0;
+}
+
+/**
+ * @brief Map int_ups_connection_status_reg to CMOS state string.
+ * @return "alive" when connected, otherwise "disconnect".
+ */
+static const char *connection_pub_state(void)
+{
+    uint16_t conn = 0;
+
+    if (!pool_read_register(int_ups_connection_status_reg, &conn)) {
+        return "disconnect";
+    }
+
+    return (conn == 1u) ? "alive" : "disconnect";
 }

@@ -50,6 +50,7 @@ static void pub_signal_handler(int sig);
 static void publish_frequency_cmd_duty(const module_config_t *cfg);
 static void publish_frequency_out_duty(const module_config_t *cfg);
 static void publish_fault_warning_code(const module_config_t *cfg);
+static const char *connection_pub_state(void);
 
 /**
  * @brief Start the CMOS subscriber thread in the parent process.
@@ -428,11 +429,8 @@ static void publish_pool_register(const module_config_t *cfg,
                                   uint16_t pool_address)
 {
     uint16_t val = 0;
-
-    const char *state =
-        (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
-            ? "alive"
-            : "disconnect";
+    (void)cfg;
+    const char *state = connection_pub_state();
 
     if (!pool_read_register(pool_address, &val)) {
         LOG_WARNING("[Inverter] publish_pool_register: "
@@ -562,16 +560,14 @@ static uint16_t frequency_convert_duty(uint16_t frequency)
 static void publish_frequency_cmd_duty(const module_config_t *cfg)
 {
     uint16_t frequency_cmd = 0;
+    (void)cfg;
 
     pool_read_register(int_frequency_write_cmd_reg, &frequency_cmd);
     uint16_t duty_frequency_cmd = frequency_convert_duty(frequency_cmd);
 
     float duty_frequency_cmd_float = (float)duty_frequency_cmd / 100.0f;
 
-    const char *state =
-        (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
-            ? "alive"
-            : "disconnect";
+    const char *state = connection_pub_state();
 
     char val_str[8];
     snprintf(val_str, sizeof(val_str), "%.2f", duty_frequency_cmd_float);
@@ -592,6 +588,7 @@ static void publish_frequency_cmd_duty(const module_config_t *cfg)
 static void publish_frequency_out_duty(const module_config_t *cfg)
 {
     uint16_t frequency_out = 0;
+    (void)cfg;
 
     pool_read_register(int_out_frequency_reg, &frequency_out);
 
@@ -599,10 +596,7 @@ static void publish_frequency_out_duty(const module_config_t *cfg)
 
     float duty_frequency_out_float = (float)duty_frequency_out / 100.0f;
 
-    const char *state =
-        (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
-            ? "alive"
-            : "disconnect";
+    const char *state = connection_pub_state();
 
     char val_str[8];
     snprintf(val_str, sizeof(val_str), "%.2f", duty_frequency_out_float);
@@ -623,15 +617,13 @@ static void publish_frequency_out_duty(const module_config_t *cfg)
 static void publish_fault_warning_code(const module_config_t *cfg)
 {
     uint16_t raw_value = 0;
+    (void)cfg;
     pool_read_register(int_fault_warning_code_reg, &raw_value);
 
     uint16_t fault_code_val = raw_value & 0xFF;
     uint16_t warning_code_val = (raw_value >> 8) & 0xFF;
 
-    const char *state =
-        (shared_connection_state_get(cfg) == CONNECTION_CONNECTED)
-            ? "alive"
-            : "disconnect";
+    const char *state = connection_pub_state();
     char fault_val_str[8];
     char warning_val_str[8];
     snprintf(fault_val_str, sizeof(fault_val_str), "%u", fault_code_val);
@@ -652,5 +644,20 @@ static void publish_fault_warning_code(const module_config_t *cfg)
                 NULL,
                 "warning_code",
                 warning_val_str);
+}
+
+/**
+ * @brief Map int_inverter_connection_status_reg to CMOS state string.
+ * @return "alive" when connected, otherwise "disconnect".
+ */
+static const char *connection_pub_state(void)
+{
+    uint16_t conn = 0;
+
+    if (!pool_read_register(int_inverter_connection_status_reg, &conn)) {
+        return "disconnect";
+    }
+
+    return (conn == 1u) ? "alive" : "disconnect";
 }
 
