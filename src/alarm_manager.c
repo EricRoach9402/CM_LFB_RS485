@@ -11,6 +11,7 @@
 #include <time.h>
 
 #include "alarm_manager.h"
+#include "config_loader.h"
 #include "log.h"
 
 #define LOG_MAX_ROWS 10000
