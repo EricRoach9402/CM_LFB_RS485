@@ -10,7 +10,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CM_LFB_RS485_VERSION "0.0.1"
+#define CM_LFB_RS485_VERSION "0.1.1"
 #define MAX_INVERTER_COUNT 10
 #define MAX_UPS_COUNT 10
 
