@@ -260,7 +260,7 @@ static void publish_additional_item(const module_config_t *cfg)
         return;
     }
 
-    publish_pool_register(cfg, NULL, "initial_flag", int_ups_init_flag_reg);
+    publish_pool_register(cfg, NULL, "ups_node", int_ups_init_flag_reg);
 }
 
 /**

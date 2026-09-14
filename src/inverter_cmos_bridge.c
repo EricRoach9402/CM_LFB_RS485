@@ -481,7 +481,7 @@ static void publish_additional_item(const module_config_t *cfg)
     publish_frequency_cmd_duty(cfg);
     publish_frequency_out_duty(cfg);
     publish_fault_warning_code(cfg);
-    publish_pool_register(cfg, NULL, "initial_flag", int_inverter_init_flag_reg);
+    publish_pool_register(cfg, NULL, "inverter_node", int_inverter_init_flag_reg);
 }
 
 /**
