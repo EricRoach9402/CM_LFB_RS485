@@ -187,7 +187,7 @@ static void *cmos_sub_thread(void *arg)
 
     pthread_cleanup_push(cleanup_sub_ctx, ctx);
 
-    cmos_sub_add(ctx, "event", NULL, "initial", "request_init_status", on_init_ups_cmd);
+    cmos_sub_add(ctx, "control_output", NULL, "initial", "request_init_status", on_init_ups_cmd);
 
     LOG_INFO("[UPS] subscriber ready "
              "(topic: event, key: request_init_status).");

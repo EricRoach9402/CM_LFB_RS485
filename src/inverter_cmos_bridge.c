@@ -404,7 +404,7 @@ static void *cmos_sub_thread(void *arg)
     cmos_sub_add(ctx, "control_output", NULL, "command", "inv_frequency_write_commands", on_frequency_write_cmd);
     cmos_sub_add(ctx, "control_output", NULL, "command", "inv_fault_Control_commands", on_fault_control_cmd);
     cmos_sub_add(ctx, "control_output", NULL, "ctrl", "main_pump", on_main_pump_duty_cmd);
-    cmos_sub_add(ctx, "event", NULL, "initial", "request_init_status", on_init_inverter_cmd);
+    cmos_sub_add(ctx, "control_output", NULL, "initial", "request_init_status", on_init_inverter_cmd);
     cmos_sub_add(ctx, "control_output", NULL, "ctrl", "bypass", on_bypass_cmd);
 
     LOG_INFO("[Inverter] subscriber ready "
