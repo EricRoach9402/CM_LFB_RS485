@@ -70,6 +70,10 @@ const device_map_profile_t ups1_profile = {
 const uint16_t int_ups_init_flag_reg = 0xA2F0;
 const uint16_t int_ups_connection_status_reg = 0xA2F1;
 
+const uint16_t dev_ups_shutdown_reg = 0x03AB;
+const uint16_t dev_ups_restart_reg = 0x03AE; //spec 0x03AD is error, 0x03AE is right.
+const uint16_t dev_ups_shutdown_verify_reg = 0x03DA;
+
 /**
  * @brief Return true when queued writes to addr may be merged.
  * @param device_address Device register address.

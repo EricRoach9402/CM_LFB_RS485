@@ -60,4 +60,11 @@ int ups_cmd_push(uint8_t uid, uint16_t addr,
  */
 int ups_init_request(uint8_t uid);
 
+/**
+ * @brief Request the restart and shutdown sequence for one UPS unit.
+ * @param uid Target modbus_uid.
+ * @return 0 if accepted, -1 if unit not found.
+ */
+int ups_reboot_request(uint8_t uid);
+
 #endif /* UPS_MODULE_H */

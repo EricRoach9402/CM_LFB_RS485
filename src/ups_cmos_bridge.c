@@ -132,6 +132,32 @@ static bool resolve_target_uid(uint8_t *out_uid)
 }
 
 /**
+ * @brief Handle CMOS reboot command.
+ * @param topic CMOS topic.
+ * @param value Command value string.
+ */
+static void on_reboot_ups_cmd(const char *topic, const char *value){
+    LOG_VERBOSE("[UPS] SUB topic='%s' key='system_reboot' value='%s'",
+                topic ? topic : NULL, value ? value : "");
+
+    uint16_t reboot_bool_val = (uint16_t)strtoul(value, NULL, 0);
+
+    if (reboot_bool_val != 1) {
+        LOG_WARNING("[UPS] Received faulty reboot command: %u", reboot_bool_val);
+        return;
+    }
+
+    uint8_t target_uid = 0;
+    if (!resolve_target_uid(&target_uid)) {
+        return;
+    }
+
+    ups_reboot_request(target_uid);
+    LOG_INFO("[UPS] Received reboot command: %u", reboot_bool_val);
+    return;
+}
+
+/**
  * @brief Handle CMOS init command.
  * @param topic CMOS topic.
  * @param value Command value string.
@@ -188,9 +214,10 @@ static void *cmos_sub_thread(void *arg)
     pthread_cleanup_push(cleanup_sub_ctx, ctx);
 
     cmos_sub_add(ctx, "control_output", NULL, "initial", "request_init_status", on_init_ups_cmd);
+    cmos_sub_add(ctx, "hmi_system_cmd", NULL, "command", "system_reboot", on_reboot_ups_cmd);
 
     LOG_INFO("[UPS] subscriber ready "
-             "(topic: event, key: request_init_status).");
+             "(keys: request_init_status, system_reboot).");
 
     cmos_sub_spin_ctx(ctx);
 

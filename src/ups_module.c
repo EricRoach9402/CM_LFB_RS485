@@ -52,6 +52,7 @@ typedef struct {
     int connection_state;
     ups_cmd_queue_t cmd_queue;
     atomic_bool init_requested;
+    atomic_bool reboot_requested;
 } ups_unit_t;
 
 static void unit_set_connection(ups_unit_t *unit, int state);
@@ -82,13 +83,14 @@ static int ups_init_callback(void *arg);
 static int ups_process_callback(void *arg);
 static int read_profile_to_pool(ups_unit_t *unit, bool track_comm_fail);
 static void run_init_sequence(ups_unit_t *unit);
+static void run_reboot_sequence(ups_unit_t *unit);
 static int ups_error_callback(void *arg, int connection_state);
-static int ups_msg_callback(void *arg, uint16_t addr,
-                            uint16_t *values, size_t count);
+static int ups_msg_callback(void *arg, uint16_t addr, uint16_t *values, size_t count);
 static void *ups_thread(void *arg);
-
 static ups_unit_t ups_units[MAX_UPS_COUNT];
 static int ups_unit_count = 0;
+static int ups_restart_cmd(ups_unit_t *unit);
+static int ups_shutdown_cmd(ups_unit_t *unit);
 
 /**
  * @brief Start all enabled UPS units.
@@ -130,6 +132,7 @@ int start_ups_modules(module_config_t ups[], int ups_count)
         unit->rtu_ctx.fd = -1;
         queue_init(&unit->cmd_queue);
         atomic_init(&unit->init_requested, false);
+        atomic_init(&unit->reboot_requested, false);
         pool_write_register(int_ups_connection_status_reg,
                             CONNECTION_DISCONNECTED);
 
@@ -248,6 +251,7 @@ int ups_cmd_push(uint8_t uid, uint16_t addr,
  */
 int ups_init_request(uint8_t uid)
 {
+    
     ups_unit_t *unit = ups_unit_from_uid(uid);
     if (!unit) {
         LOG_WARNING("[UPS] ups_init_request: uid=%u not found.", uid);
@@ -257,6 +261,24 @@ int ups_init_request(uint8_t uid)
     atomic_store(&unit->init_requested, true);
 
     LOG_INFO("[UPS] init sequence requested for uid=%u.", uid);
+    return 0;
+}
+
+/**
+ * @brief Request the restart and shutdown sequence for one UPS unit.
+ * @param uid Target modbus_uid.
+ * @return 0 if accepted, -1 if unit not found.
+ */
+int ups_reboot_request(uint8_t uid) {
+    ups_unit_t *unit = ups_unit_from_uid(uid);
+    if (!unit) {
+        LOG_WARNING("[UPS] ups_reboot_request: uid=%u not found.", uid);
+        return -1;
+    }
+
+    atomic_store(&unit->reboot_requested, true);
+
+    LOG_INFO("[UPS] reboot sequence requested for uid=%u.", uid);
     return 0;
 }
 
@@ -300,6 +322,9 @@ static int ups_process_callback(void *arg)
 
     if (atomic_exchange(&unit->init_requested, false)) {
         run_init_sequence(unit);
+    }
+    if (atomic_exchange(&unit->reboot_requested, false)) {
+        run_reboot_sequence(unit);
     }
     ups_write_cmd_t cmd;
     if (queue_pop(&unit->cmd_queue, &cmd) == 0) {
@@ -420,6 +445,28 @@ static void run_init_sequence(ups_unit_t *unit)
     pool_write_register(int_ups_init_flag_reg, 1);
     LOG_INFO("[UPS] %s: init sequence complete.",
              unit->cfg->name);
+}
+
+/**
+ * @brief Run restart then shutdown writes, verifying each against 0x03DA.
+ * @param unit Target unit.
+ */
+static void run_reboot_sequence(ups_unit_t *unit) {
+    if (ups_restart_cmd(unit) != 0) {
+        LOG_ERROR("[UPS] %s: reboot sequence aborted; restart step failed.",
+                  unit->cfg->name);
+        return;
+    }
+    LOG_INFO("[UPS] %s: restart sequence complete.", unit->cfg->name);
+
+    usleep(MODBUS_DEFAULT_INTER_SEGMENT_DELAY_US);
+
+    if (ups_shutdown_cmd(unit) != 0) {
+        LOG_ERROR("[UPS] %s: reboot sequence aborted; shutdown step failed.",
+                  unit->cfg->name);
+        return;
+    }
+    LOG_INFO("[UPS] %s: shutdown sequence complete.", unit->cfg->name);
 }
 
 /**
@@ -867,3 +914,89 @@ static void *ups_thread(void *arg)
     return NULL;
 }
 
+/**
+ * @brief Write shutdown command to device and verify result.
+ * @param unit Target unit.
+ * @return 0 on success, -1 on failure.
+ */
+static int ups_shutdown_cmd(ups_unit_t *unit) {
+
+    uint16_t values[2] = {0};
+    values[0] = 0x3030;
+    values[1] = 0x3031;
+
+    int result = write_registers_to_device(unit, dev_ups_shutdown_reg, values, 2, UPS_WRITE_MODE_FC16);
+    if (result != 0) {
+        LOG_ERROR("[UPS] %s: write to 0x%04X failed (err %d).",
+                  unit->cfg->name, dev_ups_shutdown_reg, result);
+        return -1;
+    }
+
+    uint16_t shutdown_verify_bit = (1 << 15);
+    uint16_t read_value = 0;
+    result = read_device_value(unit, dev_ups_shutdown_verify_reg, 1, &read_value);
+    if (result != 0) {
+        LOG_ERROR("[UPS] %s: read from 0x%04X failed (err %d).",
+                  unit->cfg->name, dev_ups_shutdown_verify_reg, result);
+        return -1;
+    } else {
+        LOG_INFO("[UPS] %s: read from 0x%04X success value=0x%04X.",
+                  unit->cfg->name, dev_ups_shutdown_verify_reg, read_value);
+    }
+
+    if ((read_value & shutdown_verify_bit) == 0) {
+        LOG_ERROR("[UPS] %s: shutdown verify bit 0x%04X not set in 0x%04X.",
+                  unit->cfg->name, shutdown_verify_bit, read_value);
+        return -1;
+    } else {
+        LOG_INFO("[UPS] %s: shutdown verify read from 0x%04X success value=0x%04X.",
+                  unit->cfg->name, dev_ups_shutdown_verify_reg, read_value);
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Write restart command to device and verify result.
+ * @param unit Target unit.
+ * @return 0 on success, -1 on failure.
+ */
+static int ups_restart_cmd(ups_unit_t *unit) {
+
+    uint16_t values[1] = {0};
+    values[0] = 0x3031;
+
+    int result = write_registers_to_device(unit, dev_ups_restart_reg, values, 1, UPS_WRITE_MODE_FC16);
+
+    if (result != 0) {
+        LOG_ERROR("[UPS] %s: write to 0x%04X failed (err %d).",
+                  unit->cfg->name, dev_ups_restart_reg, result);
+        return -1;
+    } else {
+        LOG_INFO("[UPS] %s: write to 0x%04X success value=0x%04X.",
+                  unit->cfg->name, dev_ups_restart_reg, values[0]);
+    }
+
+    uint16_t restart_verify_bit = (1 << 13);
+    uint16_t read_value = 0;
+    result = read_device_value(unit, dev_ups_shutdown_verify_reg, 1, &read_value);
+    if (result != 0) {
+        LOG_ERROR("[UPS] %s: read from 0x%04X failed (err %d).",
+                  unit->cfg->name, dev_ups_shutdown_verify_reg, result);
+        return -1;
+    } else {
+        LOG_INFO("[UPS] %s: read from 0x%04X success value=0x%04X.",
+                  unit->cfg->name, dev_ups_shutdown_verify_reg, read_value);
+    }
+
+    if ((read_value & restart_verify_bit) == 0) {
+        LOG_ERROR("[UPS] %s: restart verify bit 0x%04X not set in 0x%04X.",
+                  unit->cfg->name, restart_verify_bit, read_value);
+        return -1;
+    } else {
+        LOG_INFO("[UPS] %s: restart verify read from 0x%04X success value=0x%04X.",
+                  unit->cfg->name, dev_ups_shutdown_verify_reg, read_value);
+    }
+
+    return 0;
+}
