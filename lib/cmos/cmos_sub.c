@@ -355,13 +355,13 @@ cmos_sub_ctx_t *cmos_sub_create(const char *master_ip, int master_port,
     ctx->sub_slot_count = 0;// 初始化訂閱槽數量為 0
 
     ctx->master_sock = connect_tcp(master_ip, master_port); // 連接到 master，成功回傳 socket fd，失敗回傳 -1
-    if (ctx->master_sock < 0) { free(ctx); return NULL; } // 連接失敗
+    if (ctx->master_sock < 0) { close(ctx->epfd); free(ctx); return NULL; } // 連接失敗
     set_recv_timeout(ctx->master_sock, 500); /* 問題四修正：避免 ctx_lookup_slot recv 永久阻塞 */
 
     char buf[256]; // 向 master 註冊 node name，格式是 NODE node_name\n，如果發送失敗就關閉 socket 並釋放 context 後回傳 NULL
     snprintf(buf, sizeof(buf), "NODE %s\n", node_name); // 將註冊命令格式化到 buf 中
     if (send_line(ctx->master_sock, buf) <= 0) { // 發送註冊命令到 master，如果失敗就關閉 socket 並釋放 context 後回傳 NULL
-        close(ctx->master_sock); free(ctx); return NULL;
+        close(ctx->master_sock); close(ctx->epfd); free(ctx); return NULL;
     }
 
     printf("[%s] connected to master\n", node_name);

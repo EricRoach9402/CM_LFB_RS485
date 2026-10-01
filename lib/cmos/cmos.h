@@ -74,4 +74,63 @@ void cmos_sub_spin_ctx(cmos_sub_ctx_t *ctx);
 /* 釋放所有資源 */
 void cmos_sub_destroy(cmos_sub_ctx_t *ctx);
 
+/* -------------------------------------------------------
+ * Service API  (ROS-style request / response)
+ * ------------------------------------------------------- */
+
+/*
+ * Service handler (server side)：
+ *   service  — service 名稱
+ *   request  — client 送來的請求字串
+ *   response — 填入回應內容（最多 response_len-1 個字元）
+ */
+typedef void (*cmos_srv_handler_t)(const char *service,
+                                   const char *request,
+                                   char *response, int response_len);
+
+/* --- Service Server --- */
+
+/*
+ * 初始化 Service Server：
+ *   向 master 註冊 node_name，開 listen socket 等待 client 連線，
+ *   並向 master 登錄 service_name @ 127.0.0.1:listen_port。
+ *   成功回傳 0，失敗回傳 -1。
+ */
+int  cmos_srv_init(const char *master_ip, int master_port,
+                   const char *node_name, const char *service_name,
+                   int listen_port, cmos_srv_handler_t handler);
+
+/* 進入 Service spin loop（阻塞）：接受 client 連線、呼叫 handler、回傳結果 */
+void cmos_srv_spin(void);
+
+/* 釋放 Service Server 資源 */
+void cmos_srv_close(void);
+
+/* --- Service Client --- */
+
+/*
+ * 同步呼叫 service（阻塞直到收到回應或逾時）：
+ *   service_name — 要呼叫的 service 名稱
+ *   request      — 請求字串
+ *   response     — 填入回應內容的緩衝區
+ *   response_len — response 緩衝區大小
+ *   timeout_ms   — 逾時（毫秒）
+ *
+ *   成功回傳 0，失敗（service 不存在 / 逾時 / 連線錯誤）回傳 -1。
+ */
+int  cmos_srv_call(const char *master_ip, int master_port,
+                   const char *service_name,
+                   const char *request,
+                   char *response, int response_len,
+                   int timeout_ms);
+
+/*
+ * 等待 service 出現（類似 ros::service::waitForService()）：
+ *   每 500ms 嘗試一次，直到成功或 timeout_ms 到期。
+ *   成功回傳 0，timeout 回傳 -1。
+ */
+int  cmos_srv_wait(const char *master_ip, int master_port,
+                   const char *service_name,
+                   int timeout_ms);
+
 #endif

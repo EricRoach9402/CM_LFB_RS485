@@ -7,6 +7,8 @@
 #include <sys/epoll.h>
 #include <netinet/tcp.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <errno.h>
 
 #define VERSION        "0.1.1"
 #define CM_MAX_SUB_CLIENT  256 // publisher 最多同時連線的 subscriber 數量，超過就拒絕新連線
@@ -75,15 +77,15 @@ int cmos_pub_init(const char *master_ip, int master_port,
     if (master_sock < 0) return -1;
 
     snprintf(buf, sizeof(buf), "NODE %s\n", node_name); // 告訴 master 這個 publisher 的節點名稱
-    if (send_line(master_sock, buf) <= 0) return -1; // 發送註冊訊息給 master，格式是 "NODE node_name\n"
+    if (send_line(master_sock, buf) <= 0) { close(master_sock); master_sock = -1; return -1; } // 發送註冊訊息給 master，格式是 "NODE node_name\n"
 
-    
+
     /*
     開自己的 listen socket
     跟 master 建立 server socket 的流程一模一樣：socket → SO_REUSEADDR → bind → listen。差別只是 port 不同（例如 6001）。這個 socket 是給 subscriber 連進來用的。
     */
     listen_sock = socket(AF_INET, SOCK_STREAM, 0); // 建立 TCP socket，成功回傳 socket fd，失敗回傳 -1
-    if (listen_sock < 0) return -1;
+    if (listen_sock < 0) { close(master_sock); master_sock = -1; return -1; }
 
     setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -92,12 +94,12 @@ int cmos_pub_init(const char *master_ip, int master_port,
     addr.sin_port = htons(listen_port);
     inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
 
-    if (bind(listen_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) return -1;
-    if (listen(listen_sock, 10) < 0) return -1;
+    if (bind(listen_sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) { close(listen_sock); listen_sock = -1; close(master_sock); master_sock = -1; return -1; }
+    if (listen(listen_sock, 10) < 0) { close(listen_sock); listen_sock = -1; close(master_sock); master_sock = -1; return -1; }
 
     /* 建立 epoll 並把 listen_sock 加進去 */
     pub_epfd = epoll_create1(0);
-    if (pub_epfd < 0) return -1;
+    if (pub_epfd < 0) { close(listen_sock); listen_sock = -1; close(master_sock); master_sock = -1; return -1; }
     {
         struct epoll_event ev;
         ev.events  = EPOLLIN;
@@ -111,7 +113,7 @@ int cmos_pub_init(const char *master_ip, int master_port,
 
     // 向 master 註冊 送 REGISTER_PUB test_topic 127.0.0.1 6001\n 給 master，意思是：「我在 127.0.0.1:6001 上發布 test_topic，subscriber 來找我就對了。」
     snprintf(buf, sizeof(buf), "REGISTER_PUB %s 127.0.0.1 %d\n", topic, listen_port);
-    if (send_line(master_sock, buf) <= 0) return -1;
+    if (send_line(master_sock, buf) <= 0) { close(pub_epfd); pub_epfd = -1; close(listen_sock); listen_sock = -1; close(master_sock); master_sock = -1; return -1; }
 
     return 0;
 }
@@ -126,11 +128,13 @@ void cmos_pub_poll(void)
 
     int c = accept(listen_sock, NULL, NULL);
     if (c >= 0 && sub_count < CM_MAX_SUB_CLIENT) {
-        int ka = 1, idle = 10, interval = 5, count = 3;
+        int ka = 1, idle = 10, interval = 5, count = 3, nodelay = 1;
         setsockopt(c, SOL_SOCKET,  SO_KEEPALIVE,  &ka,       sizeof(ka));
         setsockopt(c, IPPROTO_TCP, TCP_KEEPIDLE,  &idle,     sizeof(idle));
         setsockopt(c, IPPROTO_TCP, TCP_KEEPINTVL, &interval, sizeof(interval));
         setsockopt(c, IPPROTO_TCP, TCP_KEEPCNT,   &count,    sizeof(count));
+        setsockopt(c, IPPROTO_TCP, TCP_NODELAY,   &nodelay,  sizeof(nodelay));
+        fcntl(c, F_SETFL, fcntl(c, F_GETFL, 0) | O_NONBLOCK);
         sub_socks[sub_count++] = c;
         printf("[PUB] subscriber connected, total=%d\n", sub_count);
     } else if (c >= 0) {
@@ -145,17 +149,20 @@ int cmos_publish(const char *state,
     int  pos = 0;
 
     /* state 寫進 wire format，讓 sub 端可以過濾 */
-    if (state) pos += snprintf(data + pos, sizeof(data) - pos, "state=%s", state);
-    if (type)  pos += snprintf(data + pos, sizeof(data) - pos, "%stype=%s",
-                               pos ? " " : "", type);
-    if (key)   pos += snprintf(data + pos, sizeof(data) - pos, "%skey=%s",
-                               pos ? " " : "", key);
+#define PUB_DATA_CAP ((int)sizeof(data) - 1)
+    if (state) { pos += snprintf(data + pos, sizeof(data) - pos, "state=%s", state);   if (pos > PUB_DATA_CAP) pos = PUB_DATA_CAP; }
+    if (type)  { pos += snprintf(data + pos, sizeof(data) - pos, "%stype=%s",
+                               pos ? " " : "", type);                                   if (pos > PUB_DATA_CAP) pos = PUB_DATA_CAP; }
+    if (key)   { pos += snprintf(data + pos, sizeof(data) - pos, "%skey=%s",
+                               pos ? " " : "", key);                                    if (pos > PUB_DATA_CAP) pos = PUB_DATA_CAP; }
     if (value) {
         if (pos)  /* 有 state/type/key → 加 value= 前綴 */
             pos += snprintf(data + pos, sizeof(data) - pos, " value=%s", value);
         else      /* 純數值，直接送，不加前綴 */
             pos += snprintf(data + pos, sizeof(data) - pos, "%s", value);
+        if (pos > PUB_DATA_CAP) pos = PUB_DATA_CAP;
     }
+#undef PUB_DATA_CAP
 
     char buf[1024]; // 組出整行訊息，格式是 "MSG topic data\n"，例如 "MSG test_topic state=ok type=temperature value=25\n"，然後發送給所有 subscriber。
     snprintf(buf, sizeof(buf), "MSG %s %s\n", pub_topic, data);
@@ -165,9 +172,13 @@ int cmos_publish(const char *state,
 #ifdef MSG_NOSIGNAL
         int n = send(sub_socks[i], buf, len, MSG_NOSIGNAL);
 #else
-        int n = send(sub_socks[i], buf, len, 0); // 發送訊息給 subscriber，使用 send() 的 MSG_NOSIGNAL 選項來避免 SIGPIPE，如果系統不支援 MSG_NOSIGNAL 就用 0，然後靠之前設的 signal(SIGPIPE, SIG_IGN) 來忽略 SIGPIPE 信號，確保 subscriber 斷線時不會殺掉整個 publisher 程式。
+        int n = send(sub_socks[i], buf, len, 0);
 #endif
         if (n <= 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                i++; /* buffer 滿，丟掉這條訊息，保持連線 */
+                continue;
+            }
             close(sub_socks[i]);
             for (int k = i; k < sub_count - 1; k++) sub_socks[k] = sub_socks[k + 1];
             sub_socks[--sub_count] = -1;
