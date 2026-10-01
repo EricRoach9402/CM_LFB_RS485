@@ -351,9 +351,14 @@ static int read_profile_to_pool(inverter_unit_t *unit, bool track_comm_fail)
     }
 
     uint16_t buf[MODBUS_MAX_READ_REGISTERS] = {0};
+    const char *path = inverter_bus_path(unit);
+    int rc = 0;
 
     size_t seg_start = 0;
     size_t seg_len = 1;
+
+    /* Hold the bus for the whole scan so other units cannot interleave. */
+    bus_coord_acquire(path);
 
     for (size_t i = 1; i <= profile->table_count; i++) {
 
@@ -376,7 +381,8 @@ static int read_profile_to_pool(inverter_unit_t *unit, bool track_comm_fail)
             if (!track_comm_fail) {
                 LOG_WARNING("[Inverter] %s init read 0x%04X len %u failed (err %d).",
                             cfg->name, start, count, result);
-                return -1;
+                rc = -1;
+                break;
             }
 
             unit->comm_fail_count++;
@@ -388,7 +394,8 @@ static int read_profile_to_pool(inverter_unit_t *unit, bool track_comm_fail)
                 for (size_t k = 0; k < profile->table_count; k++) {
                     pool_write_register(profile->table[k].pool_address, 0xFFFF);
                 }
-                return -1;
+                rc = -1;
+                break;
             }
         } else {
             if (track_comm_fail) {
@@ -403,7 +410,8 @@ static int read_profile_to_pool(inverter_unit_t *unit, bool track_comm_fail)
         seg_len = 1;
     }
 
-    return 0;
+    bus_coord_release(path);
+    return rc;
 }
 
 /**

@@ -89,8 +89,8 @@ static int ups_msg_callback(void *arg, uint16_t addr, uint16_t *values, size_t c
 static void *ups_thread(void *arg);
 static ups_unit_t ups_units[MAX_UPS_COUNT];
 static int ups_unit_count = 0;
-static int ups_restart_cmd(ups_unit_t *unit);
 static int ups_shutdown_cmd(ups_unit_t *unit);
+static int ups_restart_cmd(ups_unit_t *unit);
 
 /**
  * @brief Start all enabled UPS units.
@@ -373,9 +373,14 @@ static int read_profile_to_pool(ups_unit_t *unit, bool track_comm_fail)
     }
 
     uint16_t buf[MODBUS_MAX_READ_REGISTERS] = {0};
+    const char *path = ups_bus_path(unit);
+    int rc = 0;
 
     size_t seg_start = 0;
     size_t seg_len = 1;
+
+    /* Hold the bus for the whole scan so other units cannot interleave. */
+    bus_coord_acquire(path);
 
     for (size_t i = 1; i <= profile->table_count; i++) {
 
@@ -398,7 +403,8 @@ static int read_profile_to_pool(ups_unit_t *unit, bool track_comm_fail)
             if (!track_comm_fail) {
                 LOG_WARNING("[UPS] %s init read 0x%04X len %u failed (err %d).",
                             cfg->name, start, count, result);
-                return -1;
+                rc = -1;
+                break;
             }
 
             unit->comm_fail_count++;
@@ -410,7 +416,8 @@ static int read_profile_to_pool(ups_unit_t *unit, bool track_comm_fail)
                 for (size_t k = 0; k < profile->table_count; k++) {
                     pool_write_register(profile->table[k].pool_address, 0xFFFF);
                 }
-                return -1;
+                rc = -1;
+                break;
             }
         } else {
             if (track_comm_fail) {
@@ -425,7 +432,8 @@ static int read_profile_to_pool(ups_unit_t *unit, bool track_comm_fail)
         seg_len = 1;
     }
 
-    return 0;
+    bus_coord_release(path);
+    return rc;
 }
 
 /**
@@ -452,6 +460,7 @@ static void run_init_sequence(ups_unit_t *unit)
  * @param unit Target unit.
  */
 static void run_reboot_sequence(ups_unit_t *unit) {
+
     if (ups_restart_cmd(unit) != 0) {
         LOG_ERROR("[UPS] %s: reboot sequence aborted; restart step failed.",
                   unit->cfg->name);
@@ -919,38 +928,41 @@ static void *ups_thread(void *arg)
  * @param unit Target unit.
  * @return 0 on success, -1 on failure.
  */
-static int ups_shutdown_cmd(ups_unit_t *unit) {
+static int ups_restart_cmd(ups_unit_t *unit) {
 
     uint16_t values[2] = {0};
     values[0] = 0x3030;
     values[1] = 0x3031;
 
-    int result = write_registers_to_device(unit, dev_ups_shutdown_reg, values, 2, UPS_WRITE_MODE_FC16);
+    int result = write_registers_to_device(unit, dev_ups_restart_reg, values, 2, UPS_WRITE_MODE_FC16);
     if (result != 0) {
         LOG_ERROR("[UPS] %s: write to 0x%04X failed (err %d).",
-                  unit->cfg->name, dev_ups_shutdown_reg, result);
+                  unit->cfg->name, dev_ups_restart_reg, result);
         return -1;
+    } else {
+        LOG_INFO("[UPS] %s: write to 0x%04X success value=0x%04X,0x%04X.",
+                  unit->cfg->name, dev_ups_restart_reg, values[0], values[1]);
     }
 
-    uint16_t shutdown_verify_bit = (1 << 15);
+    uint16_t restart_verify_bit = (1 << 13);
     uint16_t read_value = 0;
-    result = read_device_value(unit, dev_ups_shutdown_verify_reg, 1, &read_value);
+    result = read_device_value(unit, dev_ups_reboot_verify_reg, 1, &read_value);
     if (result != 0) {
         LOG_ERROR("[UPS] %s: read from 0x%04X failed (err %d).",
-                  unit->cfg->name, dev_ups_shutdown_verify_reg, result);
+                  unit->cfg->name, dev_ups_reboot_verify_reg, result);
         return -1;
     } else {
         LOG_INFO("[UPS] %s: read from 0x%04X success value=0x%04X.",
-                  unit->cfg->name, dev_ups_shutdown_verify_reg, read_value);
+                  unit->cfg->name, dev_ups_reboot_verify_reg, read_value);
     }
 
-    if ((read_value & shutdown_verify_bit) == 0) {
-        LOG_ERROR("[UPS] %s: shutdown verify bit 0x%04X not set in 0x%04X.",
-                  unit->cfg->name, shutdown_verify_bit, read_value);
+    if ((read_value & restart_verify_bit) == 0) {
+        LOG_ERROR("[UPS] %s: restart verify bit 0x%04X != 0x%04X.",
+                  unit->cfg->name, restart_verify_bit, read_value);
         return -1;
     } else {
-        LOG_INFO("[UPS] %s: shutdown verify read from 0x%04X success value=0x%04X.",
-                  unit->cfg->name, dev_ups_shutdown_verify_reg, read_value);
+        LOG_INFO("[UPS] %s: restart verify read from 0x%04X success value=0x%04X.",
+                  unit->cfg->name, dev_ups_reboot_verify_reg, read_value);
     }
 
     return 0;
@@ -961,41 +973,41 @@ static int ups_shutdown_cmd(ups_unit_t *unit) {
  * @param unit Target unit.
  * @return 0 on success, -1 on failure.
  */
-static int ups_restart_cmd(ups_unit_t *unit) {
+static int ups_shutdown_cmd(ups_unit_t *unit) {
 
     uint16_t values[1] = {0};
     values[0] = 0x3031;
 
-    int result = write_registers_to_device(unit, dev_ups_restart_reg, values, 1, UPS_WRITE_MODE_FC16);
+    int result = write_registers_to_device(unit, dev_ups_shutdown_reg, values, 1, UPS_WRITE_MODE_FC16);
 
     if (result != 0) {
         LOG_ERROR("[UPS] %s: write to 0x%04X failed (err %d).",
-                  unit->cfg->name, dev_ups_restart_reg, result);
+                  unit->cfg->name, dev_ups_shutdown_reg, result);
         return -1;
     } else {
         LOG_INFO("[UPS] %s: write to 0x%04X success value=0x%04X.",
-                  unit->cfg->name, dev_ups_restart_reg, values[0]);
+                  unit->cfg->name, dev_ups_shutdown_reg, values[0]);
     }
 
-    uint16_t restart_verify_bit = (1 << 13);
+    uint16_t shutdown_verify_bit = (1 << 15);
     uint16_t read_value = 0;
-    result = read_device_value(unit, dev_ups_shutdown_verify_reg, 1, &read_value);
+    result = read_device_value(unit, dev_ups_reboot_verify_reg, 1, &read_value);
     if (result != 0) {
         LOG_ERROR("[UPS] %s: read from 0x%04X failed (err %d).",
-                  unit->cfg->name, dev_ups_shutdown_verify_reg, result);
+                  unit->cfg->name, dev_ups_reboot_verify_reg, result);
         return -1;
     } else {
         LOG_INFO("[UPS] %s: read from 0x%04X success value=0x%04X.",
-                  unit->cfg->name, dev_ups_shutdown_verify_reg, read_value);
+                  unit->cfg->name, dev_ups_reboot_verify_reg, read_value);
     }
 
-    if ((read_value & restart_verify_bit) == 0) {
-        LOG_ERROR("[UPS] %s: restart verify bit 0x%04X not set in 0x%04X.",
-                  unit->cfg->name, restart_verify_bit, read_value);
+    if ((read_value & shutdown_verify_bit) == 0) {
+        LOG_ERROR("[UPS] %s: shutdown verify bit 0x%04X != 0x%04X.",
+                  unit->cfg->name, shutdown_verify_bit, read_value);
         return -1;
     } else {
-        LOG_INFO("[UPS] %s: restart verify read from 0x%04X success value=0x%04X.",
-                  unit->cfg->name, dev_ups_shutdown_verify_reg, read_value);
+        LOG_INFO("[UPS] %s: shutdown verify read from 0x%04X success value=0x%04X.",
+                  unit->cfg->name, dev_ups_reboot_verify_reg, read_value);
     }
 
     return 0;

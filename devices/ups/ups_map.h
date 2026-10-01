@@ -16,7 +16,7 @@ extern const uint16_t int_ups_connection_status_reg;
 
 extern const uint16_t dev_ups_shutdown_reg;
 extern const uint16_t dev_ups_restart_reg;
-extern const uint16_t dev_ups_shutdown_verify_reg;
+extern const uint16_t dev_ups_reboot_verify_reg;
 
 /**
  * @brief Return true when queued writes to addr may be merged.

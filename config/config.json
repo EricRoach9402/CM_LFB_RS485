@@ -7,7 +7,7 @@
             "modbus_role": "Slave",
             "modbus_uid": 1,
             "path": "/dev/ttyUSB0",
-            "baud_rate": 9600
+            "baud_rate": 19200
         }
     ],
     "UPS": [
@@ -18,7 +18,7 @@
             "modbus_format": "RTU",
             "modbus_role": "Slave",
             "path": "/dev/ttyUSB0",
-            "baud_rate": 9600
+            "baud_rate": 19200
         }
     ]
 }
